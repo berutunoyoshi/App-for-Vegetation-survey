@@ -1,0 +1,2162 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#24543E">
+<meta name="description" content="Braun-Blanquet法による植生調査の記録から、植生表・群落区分・遷移予測・植生図作成までをオフラインで行う野帳アプリ">
+<title>植生野帳 — 植物社会学的植生調査</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'>  <rect width='512' height='512' rx='96' fill='%2324543E'/>  <rect x='96' y='96' width='320' height='320' rx='20' fill='none' stroke='%23FFFFFF' stroke-width='28'/>  <g stroke-linecap='round' stroke-width='34'>    <line x1='168' y1='352' x2='168' y2='232' stroke='%23C2A73A'/>    <line x1='232' y1='352' x2='232' y2='168' stroke='%23FFFFFF'/>    <line x1='296' y1='352' x2='296' y2='256' stroke='%239CC46A'/>    <line x1='352' y1='352' x2='352' y2='296' stroke='%23D92E63'/>  </g></svg>">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+/* 植生野帳 — 野外の明るさでも読める高コントラスト、層の色を情報として使う */
+:root {
+  color-scheme: light;
+  --bg: #EEF2EC;
+  --surface: #FFFFFF;
+  --surface-2: #F6F8F4;
+  --ink: #18231C;
+  --muted: #56645B;
+  --line: #C9D3CA;
+  --forest: #24543E;
+  --forest-ink: #FFFFFF;
+  --tape: #D92E63;          /* 調査用マーキングテープの桃色 */
+  --tape-soft: #FBE3EB;
+  --warn: #9A5B00;
+  --warn-soft: #FFF1D6;
+  --L-T1: #1F4D36; --L-T2: #3F7B50; --L-S: #7DA34C; --L-H: #C2A73A; --L-M: #8A6B48;
+  --g0: #2E6F9E; --g1: #C0582B; --g2: #4E8A3A; --g3: #8A4FA0; --g4: #B08A1E; --g5: #2C8C8C; --g6: #A33A4E; --g7: #5A5F6B;
+  --radius: 10px;
+  --font: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic UI", "Meiryo", system-ui, sans-serif;
+  --tabbar-h: 62px;
+  box-sizing: border-box;
+  padding-top: env(safe-area-inset-top, 0px);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]):not([data-theme="field"]) {
+    color-scheme: dark;
+    --bg: #111814; --surface: #19221D; --surface-2: #202B25; --ink: #E4ECE6; --muted: #9AA99F; --line: #33423A;
+    --forest: #6FB08C; --forest-ink: #0D1611; --tape: #FF6E97; --tape-soft: #3A1B26; --warn: #F2B65A; --warn-soft: #33270F;
+    --L-T1: #5FA37E; --L-T2: #7DB98A; --L-S: #A9CB6F; --L-H: #E0C760; --L-M: #C09A6E;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #111814; --surface: #19221D; --surface-2: #202B25; --ink: #E4ECE6; --muted: #9AA99F; --line: #33423A;
+  --forest: #6FB08C; --forest-ink: #0D1611; --tape: #FF6E97; --tape-soft: #3A1B26; --warn: #F2B65A; --warn-soft: #33270F;
+  --L-T1: #5FA37E; --L-T2: #7DB98A; --L-S: #A9CB6F; --L-H: #E0C760; --L-M: #C09A6E;
+}
+/* 屋外モード：直射日光下用。白地に純黒、太字、大きめの文字 */
+:root[data-theme="field"] {
+  --bg: #FFFFFF; --surface: #FFFFFF; --surface-2: #F2F2F2; --ink: #000000; --muted: #2B2B2B; --line: #000000;
+  --forest: #0B3D24; --tape: #C0003F;
+  font-size: 18px;
+}
+:root[data-theme="field"] body { font-weight: 600; }
+
+*, *::before, *::after { box-sizing: inherit; }
+html { height: 100%; -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; min-height: 100%;
+  background: var(--bg); color: var(--ink);
+  font-family: var(--font); font-size: 1rem; line-height: 1.6;
+  font-variant-numeric: tabular-nums;
+  padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px));
+}
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); background: var(--forest); z-index: 30; }
+a { color: var(--forest); }
+:focus-visible { outline: 3px solid var(--tape); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+/* ---- 上部バー ---- */
+.appbar {
+  position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20;
+  display: flex; align-items: center; justify-content: space-between;
+  height: 52px; padding: 0 16px; background: var(--forest); color: var(--forest-ink);
+}
+.brand { display: flex; align-items: center; gap: 10px; color: inherit; text-decoration: none; font-weight: 700; font-size: 1.1rem; letter-spacing: .04em; }
+.net { font-size: .8rem; padding: 2px 10px; border-radius: 99px; background: rgba(255,255,255,.18); }
+.net.off { background: var(--tape); color: #fff; }
+
+/* ---- 下部タブ ---- */
+.tabbar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
+  display: grid; grid-template-columns: repeat(5, 1fr);
+  height: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px));
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  background: var(--surface); border-top: 1px solid var(--line);
+}
+.tabbar a { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; color: var(--muted); text-decoration: none; font-size: .72rem; }
+.tabbar svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.tabbar a[aria-current="page"] { color: var(--forest); font-weight: 700; }
+.tabbar a[aria-current="page"] svg { stroke-width: 2.4; }
+
+/* ---- レイアウト ---- */
+main { max-width: 1100px; margin: 0 auto; padding: 16px 14px 32px; outline: none; }
+h1 { font-size: 1.45rem; line-height: 1.3; margin: 4px 0 4px; letter-spacing: .02em; }
+h2 { font-size: 1.12rem; margin: 0 0 10px; }
+h3 { font-size: 1rem; margin: 14px 0 6px; }
+p { margin: 0 0 10px; max-width: 72ch; }
+.lead { color: var(--muted); margin-bottom: 16px; }
+.muted { color: var(--muted); }
+.small { font-size: .85rem; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.spread { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px 12px; }
+.stack > * + * { margin-top: 12px; }
+
+section.panel {
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 14px; margin-bottom: 14px;
+}
+section.panel > h2 { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+details.panel > summary { cursor: pointer; font-weight: 700; list-style: none; }
+details.panel > summary::-webkit-details-marker { display: none; }
+details.panel > summary::after { content: "＋"; float: right; color: var(--muted); }
+details.panel[open] > summary::after { content: "－"; }
+
+/* ---- フォーム ---- */
+label.f { display: flex; flex-direction: column; gap: 4px; font-size: .85rem; color: var(--muted); }
+label.f > span { font-weight: 600; }
+input, select, textarea, button { font: inherit; color: inherit; }
+input[type=text], input[type=number], input[type=date], input[type=search], select, textarea {
+  width: 100%; min-height: 44px; padding: 8px 10px;
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; color: var(--ink);
+}
+textarea { min-height: 72px; resize: vertical; }
+input:focus, select:focus, textarea:focus { border-color: var(--forest); outline: 2px solid color-mix(in srgb, var(--forest) 35%, transparent); }
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  min-height: 44px; padding: 8px 16px; border-radius: 8px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink); font-weight: 600;
+  text-decoration: none;
+}
+.btn:hover { border-color: var(--forest); }
+.btn.primary { background: var(--forest); color: var(--forest-ink); border-color: var(--forest); }
+.btn.tape { background: var(--tape); color: #fff; border-color: var(--tape); }
+.btn.ghost { background: transparent; }
+.btn.danger { color: var(--tape); border-color: color-mix(in srgb, var(--tape) 45%, var(--line)); }
+.btn.sm { min-height: 36px; padding: 4px 10px; font-size: .88rem; }
+.btn[disabled] { opacity: .45; cursor: not-allowed; }
+
+/* セグメント（階層・被度・群度） */
+.seg { display: flex; flex-wrap: wrap; gap: 6px; }
+.seg button {
+  min-width: 46px; min-height: 46px; padding: 4px 10px; border-radius: 8px; cursor: pointer;
+  border: 1.5px solid var(--line); background: var(--surface-2); font-weight: 700; font-size: 1.05rem;
+}
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+.seg.layers button { font-size: .9rem; min-width: 64px; border-left-width: 6px; }
+.seg.layers button[data-l="T1"] { border-left-color: var(--L-T1); }
+.seg.layers button[data-l="T2"] { border-left-color: var(--L-T2); }
+.seg.layers button[data-l="S"] { border-left-color: var(--L-S); }
+.seg.layers button[data-l="H"] { border-left-color: var(--L-H); }
+.seg.layers button[data-l="M"] { border-left-color: var(--L-M); }
+
+/* ---- 調査区カード ---- */
+.rlist { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+.rcard {
+  display: grid; grid-template-columns: 30px 1fr; gap: 12px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px;
+}
+.rcard .code { font-weight: 800; font-size: 1.05rem; }
+.rcard .meta { color: var(--muted); font-size: .85rem; }
+.rcard .comm { margin-top: 4px; font-size: .9rem; }
+.rcard .acts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.rcard.excluded { opacity: .55; }
+
+/* 階層の柱（層の被度を縦に示す、このアプリの目印） */
+.strata { display: flex; flex-direction: column; gap: 2px; width: 30px; }
+.strata i { display: block; height: 14px; background: var(--surface-2); border-radius: 2px; position: relative; overflow: hidden; }
+.strata i::after { content: ""; position: absolute; inset: 0 auto 0 0; width: var(--w, 0%); background: var(--c); }
+.strata i[data-l="T1"] { --c: var(--L-T1); } .strata i[data-l="T2"] { --c: var(--L-T2); }
+.strata i[data-l="S"] { --c: var(--L-S); } .strata i[data-l="H"] { --c: var(--L-H); } .strata i[data-l="M"] { --c: var(--L-M); }
+
+/* ---- 出現種リスト ---- */
+.splayer { border-left: 6px solid var(--c, var(--line)); padding-left: 10px; margin: 12px 0; }
+.splayer[data-l="T1"] { --c: var(--L-T1); } .splayer[data-l="T2"] { --c: var(--L-T2); }
+.splayer[data-l="S"] { --c: var(--L-S); } .splayer[data-l="H"] { --c: var(--L-H); } .splayer[data-l="M"] { --c: var(--L-M); }
+.splayer h3 { margin: 0 0 6px; display: flex; gap: 8px; align-items: baseline; }
+.sprow { display: grid; grid-template-columns: 1fr 70px 64px 40px; gap: 6px; align-items: center; padding: 4px 0; border-bottom: 1px dashed var(--line); }
+.sprow select { min-height: 38px; padding: 4px 6px; }
+.sprow .x { border: none; background: none; color: var(--tape); font-size: 1.3rem; cursor: pointer; min-height: 38px; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; min-height: 34px;
+  border-radius: 99px; border: 1px solid var(--line); background: var(--surface-2); font-size: .88rem; cursor: pointer;
+}
+.chip.char { border-color: var(--forest); color: var(--forest); font-weight: 700; }
+.chip.hit { background: var(--forest); color: var(--forest-ink); border-color: var(--forest); }
+.chip.miss { opacity: .55; text-decoration: line-through; }
+
+.entry { position: sticky; bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px) + 6px); z-index: 5; box-shadow: 0 4px 18px rgba(0,0,0,.12); border-color: var(--forest); }
+.entry { padding: 10px; }
+.entry .sprow-input { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+.entry .seg { flex-wrap: nowrap; gap: 4px; }
+.entry .seg button { flex: 1 1 0; min-width: 0; min-height: 42px; padding: 2px 4px; }
+.entry .seg.layers button { font-size: .85rem; border-left-width: 5px; }
+.entry-scales { display: grid; grid-template-columns: 2.6em 1fr; gap: 6px 6px; align-items: center; }
+.entry-scales .lbl { font-size: .8rem; color: var(--muted); font-weight: 700; }
+.chips.recent { flex-wrap: nowrap; overflow-x: auto; margin-top: 8px; padding-bottom: 2px; }
+.chips.recent:empty { display: none; }
+.chips.recent .chip { flex: none; }
+
+/* ---- 植生表 ---- */
+.tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); max-height: 70vh; }
+table.veg { border-collapse: separate; border-spacing: 0; font-size: .82rem; white-space: nowrap; }
+table.veg th, table.veg td { padding: 3px 6px; border-bottom: 1px solid var(--line); text-align: center; }
+table.veg thead th { position: sticky; top: 0; background: var(--surface-2); z-index: 2; }
+table.veg thead tr:nth-child(2) th { top: 26px; }
+table.veg thead tr:nth-child(3) th { top: 52px; }
+table.veg .sp { position: sticky; left: 0; background: var(--surface); text-align: left; z-index: 1; min-width: 150px; font-weight: 600; }
+table.veg thead .sp { z-index: 3; background: var(--surface-2); }
+table.veg .ly { color: var(--muted); font-weight: 400; font-size: .75rem; margin-left: 4px; }
+table.veg tr.block th { text-align: left; background: var(--surface-2); color: var(--muted); font-weight: 700; position: sticky; left: 0; }
+table.veg td.on { font-weight: 700; }
+table.veg td.blk { background: color-mix(in srgb, var(--gc) 22%, transparent); }
+table.veg td.gstart, table.veg th.gstart { border-left: 2px solid var(--ink); }
+table.veg .gl { color: #fff; background: var(--gc); border-radius: 4px; padding: 0 6px; font-weight: 800; }
+
+/* ---- 判定 ---- */
+.cand { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.cand:last-child { border-bottom: none; }
+.bar { height: 10px; background: var(--surface-2); border-radius: 5px; overflow: hidden; margin: 6px 0; }
+.bar > i { display: block; height: 100%; background: var(--forest); }
+.cand.top .bar > i { background: var(--tape); }
+.flag { display: inline-block; font-size: .75rem; padding: 0 8px; border-radius: 99px; background: var(--warn-soft); color: var(--warn); margin-left: 6px; }
+.note { background: var(--warn-soft); color: var(--ink); border-left: 4px solid var(--warn); padding: 8px 12px; border-radius: 6px; margin: 8px 0; font-size: .9rem; }
+.badge { display: inline-block; padding: 1px 8px; border-radius: 99px; background: var(--surface-2); border: 1px solid var(--line); font-size: .78rem; }
+
+.timeline { width: 100%; overflow-x: auto; }
+.timeline svg { display: block; width: 100%; max-width: 640px; height: auto; }
+.timeline text { fill: var(--ink); font-family: var(--font); }
+.yearout { font-size: 1.15rem; font-weight: 800; }
+input[type=range] { width: 100%; accent-color: var(--tape); min-height: 40px; }
+
+/* ---- 地図 ---- */
+#map { position: relative; z-index: 0; isolation: isolate; height: 62vh; min-height: 360px; border-radius: var(--radius); border: 1px solid var(--line); background: var(--surface-2); }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 14px; font-size: .85rem; margin-top: 8px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 14px; height: 14px; border-radius: 3px; display: inline-block; }
+.leaflet-container { font-family: var(--font); }
+
+/* ---- 汎用 ---- */
+.empty { text-align: center; padding: 40px 16px; color: var(--muted); }
+.empty .btn { margin: 6px; }
+.toast {
+  position: fixed; left: 50%; top: calc(env(safe-area-inset-top, 0px) + 60px);
+  transform: translateX(-50%) translateY(-12px); opacity: 0; pointer-events: none;
+  background: var(--ink); color: var(--surface); padding: 10px 18px; border-radius: 8px; z-index: 50;
+  transition: opacity .2s, transform .2s; max-width: 90vw; font-size: .92rem;
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 2px 14px; font-size: .9rem; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; }
+hr { border: none; border-top: 1px solid var(--line); margin: 14px 0; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+table.plain { border-collapse: collapse; font-size: .85rem; width: 100%; }
+table.plain th, table.plain td { border-bottom: 1px solid var(--line); padding: 4px 6px; text-align: left; }
+table.plain input { min-height: 34px; padding: 2px 6px; }
+
+@media (min-width: 900px) {
+  .twocol { display: grid; grid-template-columns: 1.1fr 1fr; gap: 14px; align-items: start; }
+}
+@media print {
+  .appbar, .tabbar, .btn, .entry, .noprint { display: none !important; }
+  body { padding: 0; background: #fff; }
+  .tablewrap { max-height: none; overflow: visible; border: none; }
+}
+
+</style>
+<!-- 地図ライブラリ（初回オンライン時にキャッシュされ、以後オフラインでも動作） -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
+<script defer src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+</head>
+<body>
+<header class="appbar">
+  <a class="brand" href="#list" aria-label="調査区一覧へ">
+    <svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><rect x="3" y="3" width="26" height="26" rx="3" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M8 24V14M13 24V9M18 24v-7M23 24v-4" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
+    <span>植生野帳</span>
+  </a>
+  <span id="netStatus" class="net" role="status"></span>
+</header>
+
+<main id="view" tabindex="-1"></main>
+
+<nav class="tabbar" aria-label="主要画面">
+  <a href="#list" data-tab="list"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span>調査区</span></a>
+  <a href="#table" data-tab="table"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="1"/><path d="M3 10h18M9 4v16"/></svg><span>植生表</span></a>
+  <a href="#analysis" data-tab="analysis"><svg viewBox="0 0 24 24"><path d="M4 20c2-6 5-9 8-9s6 3 8 9M12 11V4M9 7l3-3 3 3"/></svg><span>判定・遷移</span></a>
+  <a href="#map" data-tab="map"><svg viewBox="0 0 24 24"><path d="M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2z M9 4v14M15 6v14"/></svg><span>植生図</span></a>
+  <a href="#settings" data-tab="settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2"/></svg><span>設定</span></a>
+</nav>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<datalist id="splist"></datalist>
+
+<script>
+
+/* ===== data.js ===== */
+/* =========================================================
+   参照データ（植生帯・群集・種名・被度階級）
+   ※群集データは代表的な構成種による「簡易参照DB」です。
+     正式な標徴種・識別種は原記載・地域植生誌で必ず確認してください。
+     設定画面から独自のJSONを読み込んで拡張・置換できます。
+   ========================================================= */
+'use strict';
+
+window.VEG = window.VEG || {};
+
+/* ---------- 被度・群度 ---------- */
+VEG.COVER_SCALES = {
+  bb7: {
+    name: 'Braun-Blanquet 7段階（r, +, 1〜5）',
+    classes: [
+      { v: 'r', label: 'r', desc: 'ごく稀・1〜数個体', mid: 0.1 },
+      { v: '+', label: '+', desc: '少数・被度僅少', mid: 0.5 },
+      { v: '1', label: '1', desc: '多数だが被度1/10以下', mid: 5 },
+      { v: '2', label: '2', desc: '被度1/10〜1/4', mid: 17.5 },
+      { v: '3', label: '3', desc: '被度1/4〜1/2', mid: 37.5 },
+      { v: '4', label: '4', desc: '被度1/2〜3/4', mid: 62.5 },
+      { v: '5', label: '5', desc: '被度3/4以上', mid: 87.5 }
+    ]
+  },
+  bb5: {
+    name: 'Braun-Blanquet 5段階（+, 1〜5）',
+    classes: [
+      { v: '+', label: '+', desc: '少数・被度僅少', mid: 0.5 },
+      { v: '1', label: '1', desc: '被度1/10以下', mid: 5 },
+      { v: '2', label: '2', desc: '被度1/10〜1/4', mid: 17.5 },
+      { v: '3', label: '3', desc: '被度1/4〜1/2', mid: 37.5 },
+      { v: '4', label: '4', desc: '被度1/2〜3/4', mid: 62.5 },
+      { v: '5', label: '5', desc: '被度3/4以上', mid: 87.5 }
+    ]
+  }
+};
+VEG.SOCIABILITY = [
+  { v: '1', desc: '単生' },
+  { v: '2', desc: '小群状・叢生' },
+  { v: '3', desc: '小斑状' },
+  { v: '4', desc: '大斑状・カーペット状に断続' },
+  { v: '5', desc: '大群状・一面を覆う' }
+];
+VEG.coverMid = function (v) {
+  const all = VEG.COVER_SCALES.bb7.classes;
+  const c = all.find(x => x.v === String(v));
+  return c ? c.mid : 0;
+};
+
+/* ---------- 階層 ---------- */
+VEG.LAYERS = [
+  { id: 'T1', name: '高木層', hint: '概ね8m以上' },
+  { id: 'T2', name: '亜高木層', hint: '概ね4〜8m' },
+  { id: 'S', name: '低木層', hint: '概ね1〜4m' },
+  { id: 'H', name: '草本層', hint: '概ね1m以下' },
+  { id: 'M', name: 'コケ層', hint: '蘚苔・地衣' }
+];
+
+/* ---------- 調査区面積の目安 ---------- */
+VEG.PLOT_GUIDE = [
+  { type: 'forest', name: '森林', min: 100, max: 500, note: '10×10〜20×25 m' },
+  { type: 'scrub', name: '低木林・林縁', min: 25, max: 100, note: '5×5〜10×10 m' },
+  { type: 'grass', name: '草原・荒地', min: 1, max: 25, note: '1×1〜5×5 m' },
+  { type: 'wetland', name: '湿原・水辺', min: 1, max: 25, note: '1×1〜5×5 m' },
+  { type: 'coast', name: '海岸砂丘・塩性地', min: 1, max: 16, note: '1×1〜4×4 m' },
+  { type: 'moss', name: 'コケ・岩上', min: 0.1, max: 4, note: '0.3×0.3〜2×2 m' }
+];
+
+/* ---------- 植生帯 ---------- */
+VEG.ZONES = {
+  ST: { name: '亜熱帯常緑広葉樹林域', short: '亜熱帯' },
+  WE: { name: '暖温帯常緑広葉樹林域（ヤブツバキクラス域）', short: '暖温帯' },
+  CD: { name: '冷温帯落葉広葉樹林域（ブナクラス域）', short: '冷温帯' },
+  MX: { name: '汎針広混交林域（北海道低地）', short: '針広混交' },
+  SA: { name: '亜高山帯針葉樹林域（コケモモ－トウヒクラス域）', short: '亜高山' },
+  AL: { name: '高山帯', short: '高山' }
+};
+
+/* 都道府県：地方・日本海側/太平洋側・植生帯境界標高の目安(m)
+   ev = 常緑広葉樹林域の上限, cd = 落葉広葉樹林域の上限, sa = 森林限界
+   値は概略の目安。地形・積雪・局地気候で大きく変わるため設定で上書き可。 */
+VEG.PREFS = [
+  ['北海道', '北海道', 'J', -1, 800, 1500, 'MX'],
+  ['青森県', '東北', 'J', 30, 1000, 1500],
+  ['岩手県', '東北', 'P', 50, 1100, 1600],
+  ['宮城県', '東北', 'P', 100, 1200, 1700],
+  ['秋田県', '東北', 'J', 50, 1000, 1500],
+  ['山形県', '東北', 'J', 50, 1200, 1700],
+  ['福島県', '東北', 'P', 200, 1400, 2000],
+  ['茨城県', '関東', 'P', 300, 1500, 2300],
+  ['栃木県', '関東', 'P', 300, 1500, 2300],
+  ['群馬県', '関東', 'P', 500, 1600, 2400],
+  ['埼玉県', '関東', 'P', 500, 1600, 2400],
+  ['千葉県', '関東', 'P', 400, 1500, 2500],
+  ['東京都', '関東', 'P', 600, 1600, 2500],
+  ['神奈川県', '関東', 'P', 700, 1600, 2500],
+  ['新潟県', '中部', 'J', 200, 1400, 2100],
+  ['富山県', '中部', 'J', 300, 1500, 2400],
+  ['石川県', '中部', 'J', 300, 1500, 2400],
+  ['福井県', '中部', 'J', 400, 1500, 2300],
+  ['山梨県', '中部', 'P', 700, 1700, 2600],
+  ['長野県', '中部', 'P', 600, 1700, 2600],
+  ['岐阜県', '中部', 'P', 600, 1600, 2600],
+  ['静岡県', '中部', 'P', 800, 1700, 2600],
+  ['愛知県', '中部', 'P', 700, 1600, 2500],
+  ['三重県', '近畿', 'P', 800, 1600, 2500],
+  ['滋賀県', '近畿', 'P', 500, 1500, 2300],
+  ['京都府', '近畿', 'J', 500, 1500, 2300],
+  ['大阪府', '近畿', 'P', 700, 1500, 2500],
+  ['兵庫県', '近畿', 'P', 600, 1500, 2300],
+  ['奈良県', '近畿', 'P', 800, 1600, 2500],
+  ['和歌山県', '近畿', 'P', 900, 1700, 2500],
+  ['鳥取県', '中国', 'J', 600, 1400, 1800],
+  ['島根県', '中国', 'J', 700, 1500, 2000],
+  ['岡山県', '中国', 'P', 700, 1500, 2000],
+  ['広島県', '中国', 'P', 700, 1500, 2000],
+  ['山口県', '中国', 'P', 800, 1500, 2000],
+  ['徳島県', '四国', 'P', 900, 1700, 2100],
+  ['香川県', '四国', 'P', 800, 1500, 2000],
+  ['愛媛県', '四国', 'P', 900, 1700, 2100],
+  ['高知県', '四国', 'P', 1000, 1700, 2100],
+  ['福岡県', '九州', 'P', 800, 1600, 2000],
+  ['佐賀県', '九州', 'P', 900, 1600, 2000],
+  ['長崎県', '九州', 'P', 900, 1600, 2000],
+  ['熊本県', '九州', 'P', 1000, 1700, 2100],
+  ['大分県', '九州', 'P', 1000, 1700, 2100],
+  ['宮崎県', '九州', 'P', 1000, 1700, 2100],
+  ['鹿児島県', '九州', 'P', 1100, 1700, 2100],
+  ['沖縄県', '南西諸島', 'P', 9999, 9999, 9999, 'ST']
+].map(a => ({ name: a[0], region: a[1], sea: a[2], ev: a[3], cd: a[4], sa: a[5], base: a[6] || null }));
+
+VEG.REGIONS = ['北海道', '東北', '関東', '中部', '近畿', '中国', '四国', '九州', '南西諸島'];
+
+/* 都道府県と標高から植生帯を推定 */
+VEG.zoneOf = function (prefName, elev, overrides) {
+  const p0 = VEG.PREFS.find(p => p.name === prefName);
+  if (!p0) return null;
+  const p = Object.assign({}, p0, (overrides || {})[prefName] || {});
+  const e = Number(elev) || 0;
+  if (p.base === 'ST') return 'ST';
+  if (p.base === 'MX') {
+    if (e < p.cd) return 'MX';
+    if (e < p.sa) return 'SA';
+    return 'AL';
+  }
+  if (e < p.ev) return 'WE';
+  if (e < p.cd) return 'CD';
+  if (e < p.sa) return 'SA';
+  return 'AL';
+};
+
+/* ---------- 遷移段階 ---------- */
+VEG.STAGES = [
+  { id: 0, name: '裸地・攪乱直後', short: '裸地' },
+  { id: 1, name: '一年生草本群落', short: '一年草' },
+  { id: 2, name: '多年生草本群落', short: '多年草' },
+  { id: 3, name: 'ススキ・ササ草原', short: '草原' },
+  { id: 4, name: '先駆性低木林', short: '先駆低木' },
+  { id: 5, name: '陽樹二次林', short: '二次林' },
+  { id: 6, name: '遷移後期林（極相種侵入）', short: '後期林' },
+  { id: 7, name: '極相林（潜在自然植生）', short: '極相' }
+];
+
+/* 植生帯ごとの各段階の標準滞在年数 [早い, 標準, 遅い] */
+VEG.STAGE_YEARS = {
+  ST: [[0, 1, 2], [1, 2, 4], [2, 4, 8], [3, 6, 12], [4, 8, 15], [10, 25, 45], [20, 40, 80], [0, 0, 0]],
+  WE: [[0, 1, 2], [1, 2, 4], [2, 5, 10], [4, 10, 20], [5, 10, 20], [20, 40, 70], [40, 80, 150], [0, 0, 0]],
+  CD: [[0, 1, 3], [1, 3, 5], [3, 6, 12], [5, 12, 25], [5, 12, 25], [25, 50, 90], [50, 100, 200], [0, 0, 0]],
+  MX: [[0, 1, 3], [1, 3, 5], [3, 6, 12], [5, 12, 25], [5, 15, 30], [30, 60, 100], [60, 120, 250], [0, 0, 0]],
+  SA: [[0, 2, 5], [2, 5, 10], [5, 10, 20], [5, 15, 30], [10, 20, 40], [30, 60, 120], [60, 120, 250], [0, 0, 0]],
+  AL: [[0, 5, 10], [5, 10, 20], [10, 30, 60], [20, 50, 100], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]]
+};
+
+/* ---------- 群集参照DB ----------
+   char: 標徴種・優占種の代表例 / diff: 識別種の代表例 / comp: 常在的随伴種の例
+   stage: 遷移段階 / type: climax|substitute|pioneer|edaphic|plantation
+   zones: 植生帯 / regions: 地方（空=全国） / sea: J|P|''（日本海側/太平洋側） */
+VEG.SYNTAXA = [
+  /* ---- 暖温帯 自然林 ---- */
+  { id: 'ardisio-castanopsietum', ja: 'ヤブコウジ－スダジイ群集', la: 'Ardisio-Castanopsietum sieboldii', cls: 'ヤブツバキクラス', type: 'climax', stage: 7, zones: ['WE'], regions: ['関東', '中部', '近畿', '中国', '四国', '九州'], sea: '',
+    char: ['スダジイ', 'ヤブコウジ', 'テイカカズラ', 'ベニシダ'], diff: ['ヒサカキ', 'ネズミモチ', 'シロダモ'], comp: ['ヤブツバキ', 'アオキ', 'ジャノヒゲ', 'ヤブラン'], note: '内陸〜沿海の適潤地。シイ林の代表的な群集。' },
+  { id: 'polysticho-perseetum', ja: 'イノデ－タブノキ群集', la: 'Polysticho-Perseetum thunbergii', cls: 'ヤブツバキクラス', type: 'climax', stage: 7, zones: ['WE'], regions: ['東北', '関東', '中部', '近畿', '中国', '四国', '九州'], sea: '',
+    char: ['タブノキ', 'イノデ', 'ヤブニッケイ'], diff: ['ホソバカナワラビ', 'ヤツデ', 'マサキ'], comp: ['ヤブツバキ', 'アオキ', 'シロダモ', 'テイカカズラ'], note: '沿海地の谷部・斜面下部の湿潤肥沃地。日本海側では北上する。' },
+  { id: 'quercetum-myrsinifoliae', ja: 'シラカシ群集', la: 'Quercetum myrsinifoliae', cls: 'ヤブツバキクラス', type: 'climax', stage: 7, zones: ['WE'], regions: ['関東', '中部'], sea: 'P',
+    char: ['シラカシ', 'ヒサカキ', 'ジャノヒゲ'], diff: ['シュロ', 'ヒイラギ', 'アズマネザサ'], comp: ['アオキ', 'シロダモ', 'ヤブコウジ', 'ベニシダ'], note: '関東内陸の台地・低地。屋敷林・社寺林に残存。' },
+  { id: 'photinio-castanopsietum', ja: 'コジイ－カナメモチ群集', la: 'Photinio-Castanopsietum cuspidatae', cls: 'ヤブツバキクラス', type: 'climax', stage: 7, zones: ['WE'], regions: ['中部', '近畿', '中国'], sea: '',
+    char: ['ツブラジイ', 'カナメモチ', 'アラカシ'], diff: ['ソヨゴ', 'コバノミツバツツジ'], comp: ['ヒサカキ', 'ネズミモチ', 'ベニシダ'], note: '近畿〜瀬戸内の内陸・乾性立地のシイ林。' },
+  { id: 'symploco-castanopsietum', ja: 'ミミズバイ－スダジイ群集', la: 'Symploco glaucae-Castanopsietum sieboldii', cls: 'ヤブツバキクラス', type: 'climax', stage: 7, zones: ['WE'], regions: ['四国', '九州'], sea: '',
+    char: ['スダジイ', 'ミミズバイ', 'イスノキ', 'バリバリノキ'], diff: ['コバンモチ', 'カンザブロウノキ', 'ホソバタブ'], comp: ['サカキ', 'ヤブツバキ', 'ルリミノキ'], note: '四国・九州南部の暖地のシイ林。' },
+  { id: 'sakakio-quercetum', ja: 'サカキ－ウラジロガシ群集', la: 'Sakakio-Quercetum salicinae', cls: 'ヤブツバキクラス', type: 'climax', stage: 7, zones: ['WE'], regions: ['関東', '中部', '近畿', '中国', '四国', '九州'], sea: '',
+    char: ['ウラジロガシ', 'サカキ', 'アカガシ'], diff: ['シキミ', 'ハイノキ', 'ミヤマシキミ'], comp: ['ヒサカキ', 'イヌガシ', 'ヤブツバキ'], note: '暖温帯上部（シイ林より上）の山地斜面。' },
+  { id: 'illicio-abietetum', ja: 'シキミ－モミ群集', la: 'Illicio religiosi-Abietetum firmae', cls: 'ヤブツバキクラス', type: 'climax', stage: 7, zones: ['WE', 'CD'], regions: ['関東', '中部', '近畿', '中国', '四国', '九州'], sea: 'P',
+    char: ['モミ', 'シキミ', 'ツガ'], diff: ['アセビ', 'ミヤマシキミ', 'イヌガヤ'], comp: ['ソヨゴ', 'ヒサカキ', 'サカキ'], note: '暖温帯上部〜中間温帯の尾根・急斜面。' },
+  { id: 'psychotrio-castanopsietum', ja: 'リュウキュウアオキ－スダジイ群集', la: 'Psychotrio rubrae-Castanopsietum sieboldii', cls: 'ヤブツバキクラス', type: 'climax', stage: 7, zones: ['ST'], regions: ['南西諸島', '九州'], sea: '',
+    char: ['スダジイ', 'リュウキュウアオキ', 'イジュ'], diff: ['オキナワウラジロガシ', 'ボチョウジ', 'ヒカゲヘゴ'], comp: ['イスノキ', 'タブノキ', 'ホルトノキ'], note: '奄美・沖縄の山地のシイ林（亜熱帯）。' },
+
+  /* ---- 冷温帯 自然林 ---- */
+  { id: 'saso-fagetum', ja: 'チシマザサ－ブナ群集', la: 'Saso kurilensis-Fagetum crenatae', cls: 'ブナクラス', type: 'climax', stage: 7, zones: ['CD'], regions: ['北海道', '東北', '関東', '中部', '近畿', '中国'], sea: 'J',
+    char: ['ブナ', 'チシマザサ', 'ヒメアオキ', 'ハイイヌガヤ'], diff: ['エゾユズリハ', 'ツルシキミ', 'オオバクロモジ', 'ムラサキヤシオツツジ'], comp: ['ハウチワカエデ', 'オオカメノキ', 'ツクバネソウ', 'ユキザサ'], note: '多雪の日本海側のブナ林。' },
+  { id: 'corno-fagetum', ja: 'ヤマボウシ－ブナ群集', la: 'Corno-Fagetum crenatae', cls: 'ブナクラス', type: 'climax', stage: 7, zones: ['CD'], regions: ['東北', '関東', '中部'], sea: 'P',
+    char: ['ブナ', 'スズタケ', 'ヤマボウシ'], diff: ['イヌブナ', 'シロヤシオ', 'コハウチワカエデ'], comp: ['ミズナラ', 'リョウブ', 'ツクバネウツギ'], note: '少雪の太平洋側（東日本）のブナ林。' },
+  { id: 'sapio-fagetum', ja: 'シラキ－ブナ群集', la: 'Sapio japonici-Fagetum crenatae', cls: 'ブナクラス', type: 'climax', stage: 7, zones: ['CD'], regions: ['中部', '近畿', '中国', '四国', '九州'], sea: '',
+    char: ['ブナ', 'シラキ', 'スズタケ'], diff: ['クロモジ', 'ミズメ', 'コハクウンボク'], comp: ['ミズナラ', 'リョウブ', 'ウリハダカエデ'], note: '西日本のブナ林。' },
+  { id: 'fagus-japonica', ja: 'イヌブナ群落', la: 'Fagus japonica community', cls: 'ブナクラス', type: 'climax', stage: 7, zones: ['CD', 'WE'], regions: ['東北', '関東', '中部', '近畿', '四国', '九州'], sea: 'P',
+    char: ['イヌブナ', 'イヌシデ'], diff: ['アカシデ', 'クマシデ', 'チドリノキ'], comp: ['モミ', 'リョウブ', 'スズタケ'], note: 'ブナ林と常緑広葉樹林の間（中間温帯）の太平洋側。' },
+  { id: 'abies-quercus-mx', ja: 'トドマツ－ミズナラ群落（汎針広混交林）', la: 'Abies sachalinensis-Quercus crispula community', cls: 'ブナクラス', type: 'climax', stage: 7, zones: ['MX'], regions: ['北海道'], sea: '',
+    char: ['トドマツ', 'ミズナラ', 'エゾイタヤ', 'クマイザサ'], diff: ['シナノキ', 'ハリギリ', 'ツタウルシ'], comp: ['ハウチワカエデ', 'ツルアジサイ', 'オシダ'], note: '北海道低地〜山地の針葉樹と広葉樹の混交林。' },
+
+  /* ---- 亜高山・高山 ---- */
+  { id: 'abietetum-mariesii', ja: 'オオシラビソ群集', la: 'Abietetum mariesii', cls: 'コケモモ－トウヒクラス', type: 'climax', stage: 7, zones: ['SA'], regions: ['東北', '中部'], sea: 'J',
+    char: ['オオシラビソ', 'ハクサンシャクナゲ', 'ミツバオウレン'], diff: ['チシマザサ', 'ゴゼンタチバナ', 'マイヅルソウ'], comp: ['ナナカマド', 'オオカメノキ', 'コヨウラクツツジ'], note: '多雪地の亜高山針葉樹林。' },
+  { id: 'abietetum-veitchio-mariesii', ja: 'シラビソ－オオシラビソ群集', la: 'Abietetum veitchio-mariesii', cls: 'コケモモ－トウヒクラス', type: 'climax', stage: 7, zones: ['SA'], regions: ['関東', '中部', '近畿', '四国'], sea: 'P',
+    char: ['シラビソ', 'オオシラビソ', 'コメツガ'], diff: ['カニコウモリ', 'オサバグサ', 'コミヤマカタバミ'], comp: ['ゴゼンタチバナ', 'マイヅルソウ', 'ミヤマワラビ'], note: '中部山岳太平洋側の亜高山針葉樹林。' },
+  { id: 'piceetum-jezoensis', ja: 'エゾマツ－トドマツ群集', la: 'Abieti-Piceetum jezoensis', cls: 'コケモモ－トウヒクラス', type: 'climax', stage: 7, zones: ['SA', 'MX'], regions: ['北海道'], sea: '',
+    char: ['エゾマツ', 'トドマツ', 'ゴゼンタチバナ'], diff: ['アカエゾマツ', 'ツルツゲ', 'コヨウラクツツジ'], comp: ['ダケカンバ', 'オオカメノキ', 'クマイザサ'], note: '北海道の亜寒帯性針葉樹林。' },
+  { id: 'pinus-pumila', ja: 'ハイマツ群落', la: 'Pinus pumila community', cls: 'コケモモ－ハイマツクラス', type: 'climax', stage: 7, zones: ['AL', 'SA'], regions: [], sea: '',
+    char: ['ハイマツ', 'コケモモ'], diff: ['ガンコウラン', 'クロマメノキ'], comp: ['ミネカエデ', 'ウラジロナナカマド'], note: '森林限界以上の風衝地・雪田周辺。' },
+  { id: 'betula-ermanii', ja: 'ダケカンバ群落', la: 'Betula ermanii community', cls: 'ダケカンバ－ミヤマハンノキクラス', type: 'pioneer', stage: 5, zones: ['SA', 'CD'], regions: [], sea: '',
+    char: ['ダケカンバ', 'ミヤマハンノキ'], diff: ['オオカメノキ', 'ナナカマド'], comp: ['チシマザサ', 'シラネワラビ'], note: '亜高山帯の崩壊地・雪崩地の先駆林、または上部の風衝林。' },
+
+  /* ---- 代償植生：二次林 ---- */
+  { id: 'quercetum-acutissimo-serratae', ja: 'クヌギ－コナラ群集', la: 'Quercetum acutissimo-serratae', cls: 'ブナクラス（代償）', type: 'substitute', stage: 5, zones: ['WE', 'CD'], regions: ['東北', '関東', '中部'], sea: 'P',
+    char: ['コナラ', 'クヌギ', 'エゴノキ'], diff: ['シラヤマギク', 'アズマネザサ', 'ヤマツツジ'], comp: ['ヤマザクラ', 'ガマズミ', 'ムラサキシキブ'], note: '関東を中心とした雑木林（薪炭林）。' },
+  { id: 'castaneo-quercetum', ja: 'クリ－ミズナラ群集', la: 'Castaneo-Quercetum crispulae', cls: 'ブナクラス（代償）', type: 'substitute', stage: 5, zones: ['CD', 'MX'], regions: [], sea: '',
+    char: ['ミズナラ', 'クリ', 'コシアブラ'], diff: ['ヤマツツジ', 'ツクバネウツギ', 'アオハダ'], comp: ['ハウチワカエデ', 'リョウブ', 'オオカメノキ'], note: 'ブナ林伐採後などの冷温帯の二次林。' },
+  { id: 'konara-cd', ja: 'コナラ群落（冷温帯下部・中間温帯）', la: 'Quercus serrata community', cls: 'ブナクラス（代償）', type: 'substitute', stage: 5, zones: ['CD', 'WE'], regions: [], sea: '',
+    char: ['コナラ', 'リョウブ'], diff: ['ウリハダカエデ', 'ヤマウルシ'], comp: ['ガマズミ', 'ネジキ'], note: '広域の落葉広葉二次林。' },
+  { id: 'rhododendro-kaempferi-pinetum', ja: 'ヤマツツジ－アカマツ群集', la: 'Rhododendro kaempferi-Pinetum densiflorae', cls: 'ブナクラス／ヤブツバキクラス（代償）', type: 'substitute', stage: 5, zones: ['WE', 'CD'], regions: ['東北', '関東', '中部'], sea: '',
+    char: ['アカマツ', 'ヤマツツジ'], diff: ['ネジキ', 'ソヨゴ', 'ヤマウルシ'], comp: ['コナラ', 'リョウブ', 'ススキ'], note: '尾根・乾性立地の二次林。' },
+  { id: 'rhododendro-macrosepali-pinetum', ja: 'モチツツジ－アカマツ群集', la: 'Rhododendro macrosepali-Pinetum densiflorae', cls: 'ヤブツバキクラス（代償）', type: 'substitute', stage: 5, zones: ['WE'], regions: ['中部', '近畿', '中国', '四国'], sea: '',
+    char: ['アカマツ', 'モチツツジ', 'コバノミツバツツジ'], diff: ['ソヨゴ', 'コシダ', 'ウラジロ'], comp: ['ネジキ', 'ヒサカキ', 'シャシャンボ'], note: '近畿・瀬戸内の花崗岩地などの二次林。' },
+  { id: 'pinus-luchuensis', ja: 'リュウキュウマツ群落', la: 'Pinus luchuensis community', cls: 'ヤブツバキクラス（代償）', type: 'substitute', stage: 5, zones: ['ST'], regions: ['南西諸島'], sea: '',
+    char: ['リュウキュウマツ', 'シャリンバイ'], diff: ['コシダ', 'ウラジロ'], comp: ['イジュ', 'ギーマ'], note: '琉球列島の二次林。' },
+  { id: 'betula-platyphylla', ja: 'シラカンバ群落', la: 'Betula platyphylla community', cls: 'ブナクラス（代償）', type: 'pioneer', stage: 5, zones: ['CD', 'MX'], regions: ['北海道', '東北', '中部'], sea: '',
+    char: ['シラカンバ', 'ヤマナラシ'], diff: ['ノリウツギ', 'ヤマハンノキ'], comp: ['ススキ', 'ワラビ'], note: '火入れ・伐採・山火事跡の先駆林。' },
+
+  /* ---- 先駆低木林・林縁 ---- */
+  { id: 'mallotus-clerodendrum', ja: 'アカメガシワ－クサギ群落', la: 'Mallotus japonicus-Clerodendrum trichotomum community', cls: 'ヤブツバキクラス（代償）', type: 'pioneer', stage: 4, zones: ['WE', 'ST'], regions: [], sea: '',
+    char: ['アカメガシワ', 'クサギ', 'カラスザンショウ'], diff: ['ヌルデ', 'タラノキ', 'ヤマグワ'], comp: ['クズ', 'ノイバラ', 'ヘクソカズラ'], note: '伐採跡・放棄地の先駆性低木林（暖温帯）。' },
+  { id: 'aralia-rubus', ja: 'タラノキ－クマイチゴ群落', la: 'Aralia elata-Rubus crataegifolius community', cls: 'ブナクラス（代償）', type: 'pioneer', stage: 4, zones: ['CD', 'MX'], regions: [], sea: '',
+    char: ['タラノキ', 'クマイチゴ', 'ヤマグワ'], diff: ['タニウツギ', 'ノリウツギ', 'ヤマハンノキ'], comp: ['ススキ', 'ヨモギ', 'ヒヨドリバナ'], note: '冷温帯の伐採跡・林道法面の先駆群落。' },
+
+  /* ---- 草原 ---- */
+  { id: 'pleioblasto-miscanthetum', ja: 'アズマネザサ－ススキ群集', la: 'Pleioblasto chino-Miscanthetum sinensis', cls: 'ススキクラス', type: 'substitute', stage: 3, zones: ['WE', 'CD'], regions: ['東北', '関東', '中部'], sea: '',
+    char: ['ススキ', 'アズマネザサ'], diff: ['ワラビ', 'ツリガネニンジン', 'ヤマハギ'], comp: ['ヨモギ', 'ノガリヤス', 'ワレモコウ'], note: '関東周辺の刈取り草原・法面。' },
+  { id: 'arundinello-miscanthetum', ja: 'トダシバ－ススキ群集', la: 'Arundinello hirtae-Miscanthetum sinensis', cls: 'ススキクラス', type: 'substitute', stage: 3, zones: ['WE', 'CD'], regions: [], sea: '',
+    char: ['ススキ', 'トダシバ', 'ワレモコウ'], diff: ['オミナエシ', 'ネコハギ', 'ツリガネニンジン'], comp: ['ヨモギ', 'ヤマハギ', 'キンミズヒキ'], note: '採草・火入れで維持される半自然草原。' },
+  { id: 'sasa-grass', ja: 'ササ草原（ミヤコザサ・クマイザサ等）', la: 'Sasa grassland', cls: 'ススキクラス', type: 'substitute', stage: 3, zones: ['CD', 'MX', 'SA'], regions: [], sea: '',
+    char: ['クマイザサ', 'ミヤコザサ', 'チシマザサ'], diff: ['ススキ', 'ワラビ'], comp: ['ヨモギ', 'オカトラノオ'], note: '森林伐採・火入れ後に成立するササ優占群落。遷移が停滞しやすい。' },
+
+  /* ---- 荒地・雑草群落 ---- */
+  { id: 'solidago-community', ja: 'セイタカアワダチソウ群落', la: 'Solidago altissima community', cls: 'ヨモギクラス', type: 'pioneer', stage: 2, zones: ['WE', 'CD', 'ST'], regions: [], sea: '',
+    char: ['セイタカアワダチソウ', 'ヨモギ', 'クズ'], diff: ['ヒメムカシヨモギ', 'オオアレチノギク', 'カナムグラ'], comp: ['ススキ', 'チガヤ', 'ヘクソカズラ'], note: '耕作放棄地・造成地の多年生草本群落。' },
+  { id: 'artemisio-imperatetum', ja: 'ヨモギ－チガヤ群落', la: 'Artemisia indica-Imperata cylindrica community', cls: 'ヨモギクラス', type: 'pioneer', stage: 2, zones: ['WE', 'CD', 'ST'], regions: [], sea: '',
+    char: ['チガヤ', 'ヨモギ'], diff: ['スギナ', 'ヘクソカズラ', 'ノチドメ'], comp: ['セイタカアワダチソウ', 'カタバミ'], note: '畦畔・堤防・空き地の多年生草本群落。' },
+  { id: 'digitaria-setaria', ja: 'メヒシバ－エノコログサ群落', la: 'Digitaria ciliaris-Setaria viridis community', cls: 'ヒメムカシヨモギ－オオアレチノギククラス', type: 'pioneer', stage: 1, zones: ['WE', 'CD', 'ST', 'MX'], regions: [], sea: '',
+    char: ['メヒシバ', 'エノコログサ', 'アキノエノコログサ'], diff: ['オヒシバ', 'ヒメムカシヨモギ', 'エノキグサ'], comp: ['ヨモギ', 'カタバミ', 'イヌビユ'], note: '耕作放棄直後・攪乱地の一年生草本群落。' },
+  { id: 'erechtites-senecio', ja: 'ベニバナボロギク－ダンドボロギク群落', la: 'Crassocephalum crepidioides-Erechtites hieraciifolius community', cls: 'ヒメムカシヨモギ－オオアレチノギククラス', type: 'pioneer', stage: 1, zones: ['WE', 'CD'], regions: [], sea: '',
+    char: ['ベニバナボロギク', 'ダンドボロギク'], diff: ['ヒメムカシヨモギ', 'タケニグサ'], comp: ['ヨモギ', 'ススキ'], note: '伐採直後・山火事跡の一年生草本群落。' },
+
+  /* ---- 立地的（土地的）群落 ---- */
+  { id: 'phragmitetum', ja: 'ヨシ群集', la: 'Phragmitetum australis', cls: 'ヨシクラス', type: 'edaphic', stage: 3, zones: ['WE', 'CD', 'MX', 'ST'], regions: [], sea: '',
+    char: ['ヨシ'], diff: ['ミゾソバ', 'カサスゲ', 'セリ'], comp: ['ガマ', 'オギ'], note: '湿地・河川沿い・休耕田。乾燥化でオギ・ハンノキ林へ。' },
+  { id: 'alnus-japonica', ja: 'ハンノキ群落', la: 'Alnus japonica community', cls: 'ハンノキクラス', type: 'edaphic', stage: 6, zones: ['WE', 'CD', 'MX'], regions: [], sea: '',
+    char: ['ハンノキ', 'ハシドイ'], diff: ['ミゾソバ', 'カサスゲ', 'ヨシ'], comp: ['ヤナギ類', 'ノイバラ'], note: '湿地林。地下水位が高い限り持続する立地的極相。' },
+  { id: 'salix-community', ja: 'ヤナギ低木群落（河畔）', la: 'Salix community', cls: 'ヤナギクラス', type: 'edaphic', stage: 4, zones: ['WE', 'CD', 'MX'], regions: [], sea: '',
+    char: ['タチヤナギ', 'カワヤナギ', 'ネコヤナギ'], diff: ['ツルヨシ', 'オギ'], comp: ['ヨシ', 'クズ'], note: '河川の中州・河岸。増水攪乱で更新。' },
+  { id: 'glehnio-caricetum', ja: 'ハマボウフウ－コウボウムギ群集', la: 'Glehnio littoralis-Caricetum kobomugi', cls: 'ハマボウフウクラス', type: 'edaphic', stage: 2, zones: ['WE', 'CD', 'MX'], regions: [], sea: '',
+    char: ['コウボウムギ', 'ハマボウフウ', 'ハマヒルガオ'], diff: ['ケカモノハシ', 'ハマニンニク', 'ハマエンドウ'], comp: ['オニシバ', 'ハマニガナ'], note: '海岸砂丘の前砂丘。飛砂で維持される。' },
+  { id: 'vitex-rotundifolia', ja: 'ハマゴウ群落', la: 'Vitex rotundifolia community', cls: 'ハマボウフウクラス', type: 'edaphic', stage: 3, zones: ['WE', 'ST'], regions: [], sea: '',
+    char: ['ハマゴウ', 'ハマヒルガオ'], diff: ['コウボウシバ', 'チガヤ'], comp: ['ハマエンドウ', 'ケカモノハシ'], note: '安定した砂丘内陸側。さらに内陸でトベラ・マサキ低木林へ。' },
+  { id: 'pittosporum-euonymus', ja: 'トベラ－マサキ群落（海岸風衝低木林）', la: 'Pittosporum tobira-Euonymus japonicus community', cls: 'ヤブツバキクラス', type: 'edaphic', stage: 6, zones: ['WE', 'ST'], regions: [], sea: '',
+    char: ['トベラ', 'マサキ', 'シャリンバイ'], diff: ['ハマヒサカキ', 'オオバグミ'], comp: ['ヤブツバキ', 'ネズミモチ', 'テリハノイバラ'], note: '海岸の風衝地。潮風で高木化が抑えられる立地的群落。' },
+
+  /* ---- 植林・竹林 ---- */
+  { id: 'cryptomeria-plantation', ja: 'スギ・ヒノキ植林', la: 'Cryptomeria / Chamaecyparis plantation', cls: '植林', type: 'plantation', stage: 5, zones: ['WE', 'CD'], regions: [], sea: '',
+    char: ['スギ', 'ヒノキ'], diff: [], comp: ['イヌガヤ', 'ジュウモンジシダ', 'ベニシダ'], note: '人工林。放置で林床に自然植生構成種が侵入する。' },
+  { id: 'phyllostachys-grove', ja: 'モウソウチク・マダケ林', la: 'Phyllostachys grove', cls: '竹林', type: 'plantation', stage: 5, zones: ['WE', 'CD'], regions: [], sea: '',
+    char: ['モウソウチク', 'マダケ', 'ハチク'], diff: [], comp: ['アオキ', 'シュロ'], note: '放置竹林は周辺林へ拡大し、遷移を阻害する。' },
+  { id: 'robinia-community', ja: 'ニセアカシア群落', la: 'Robinia pseudoacacia community', cls: '外来林', type: 'pioneer', stage: 5, zones: ['WE', 'CD'], regions: [], sea: '',
+    char: ['ニセアカシア'], diff: ['カナムグラ', 'ヤブガラシ'], comp: ['ヨモギ', 'クズ'], note: '外来樹種林。河川敷・法面で拡大。' }
+];
+
+/* 植生帯ごとの「極相構成樹種」（低木層・草本層に出現すると遷移進行の指標） */
+VEG.LATE_TREES = {
+  ST: ['スダジイ', 'イジュ', 'オキナワウラジロガシ', 'イスノキ', 'タブノキ', 'ホルトノキ', 'リュウキュウアオキ'],
+  WE: ['スダジイ', 'ツブラジイ', 'タブノキ', 'シラカシ', 'アラカシ', 'ウラジロガシ', 'アカガシ', 'イチイガシ', 'ツクバネガシ', 'ヤブツバキ', 'シロダモ', 'ヤブニッケイ', 'イスノキ', 'モミ', 'カゴノキ', 'バリバリノキ'],
+  CD: ['ブナ', 'イヌブナ', 'ミズナラ', 'トチノキ', 'カツラ', 'サワグルミ', 'ハウチワカエデ', 'イタヤカエデ', 'モミ', 'ツガ'],
+  MX: ['トドマツ', 'エゾマツ', 'ミズナラ', 'エゾイタヤ', 'シナノキ', 'ハリギリ'],
+  SA: ['オオシラビソ', 'シラビソ', 'コメツガ', 'トウヒ', 'エゾマツ', 'トドマツ'],
+  AL: ['ハイマツ']
+};
+/* 遷移を停滞させる種（林床で優占すると後継樹が育ちにくい） */
+VEG.ARRESTING = ['チシマザサ', 'クマイザサ', 'ミヤコザサ', 'スズタケ', 'アズマネザサ', 'ネザサ', 'モウソウチク', 'マダケ', 'クズ', 'コシダ', 'ウラジロ', 'イワヒメワラビ'];
+
+/* ---------- 種名リスト（入力補完用） ---------- */
+VEG.SPECIES_EXTRA = (
+  'アオキ アオハダ アカシデ アカメガシワ アキノエノコログサ アケビ アズキナシ アセビ アブラチャン アラカシ アワブキ イイギリ イタヤカエデ イチイガシ イヌガシ イヌガヤ イヌザクラ イヌシデ イヌツゲ イヌビワ イボタノキ イロハモミジ ウグイスカグラ ウツギ ウメモドキ ウラジロノキ ウリカエデ ウリハダカエデ ウワミズザクラ エゴノキ エゾアジサイ エノキ オオウラジロノキ オオバヤシャブシ オオモミジ オニグルミ カクレミノ カゴノキ カスミザクラ カツラ カナクギノキ カマツカ カヤ カラスザンショウ キハダ キブシ クサイチゴ クスノキ クマシデ クマノミズキ クリ クロガネモチ クロバイ クロマツ ケヤキ ケンポナシ コアジサイ コクサギ コゴメウツギ コシアブラ コナラ コバノガマズミ コブシ ゴンズイ サカキ サクラ サワグルミ サワシバ サワフタギ サンショウ シナノキ シャシャンボ シュロ シロモジ スイカズラ ズミ センダン ソヨゴ タカノツメ タマアジサイ タムシバ チドリノキ ツクバネウツギ ツクバネガシ ツタ ツタウルシ ツルアジサイ ツルウメモドキ トウヒ トチノキ ナツツバキ ナナカマド ニガイチゴ ニシキギ ヌルデ ネジキ ネムノキ ノイバラ ノリウツギ ハクウンボク ハゼノキ ハリギリ ヒイラギ ヒノキ ヒメシャラ ヒメユズリハ ホオノキ マユミ マルバアオダモ マンサク ミズキ ミズメ ミツバアケビ ミツバツツジ ムラサキシキブ メギ モチノキ ヤブデマリ ヤブムラサキ ヤマウルシ ヤマグワ ヤマザクラ ヤマハギ ヤマハンノキ ヤマフジ ユズリハ リョウブ ' +
+  'アキノキリンソウ アマチャヅル イヌワラビ イワヒメワラビ ウバユリ ウラジロ オオバコ オシダ オトコエシ オニドコロ オヤブジラミ カタバミ カナムグラ カラムシ キジムシロ キンミズヒキ クサソテツ クマワラビ コウヤボウキ コシダ ゲンノショウコ シシガシラ シャガ シュンラン ジュウモンジシダ スギナ スゲ類 ゼンマイ タチツボスミレ タケニグサ チヂミザサ ツユクサ ツルリンドウ トコロ ドクダミ ナガバモミジイチゴ ナルコユリ ノガリヤス ノコンギク ノササゲ ハエドクソウ ヒカゲノカズラ ヒヨドリバナ フキ ベニシダ ホウチャクソウ ホタルブクロ マムシグサ ミズヒキ ミツバ ミヤマカンスゲ ムラサキケマン ヤブガラシ ヤブソテツ ヤブタバコ ヤブマオ ヤブミョウガ ヤブラン ヤマノイモ ユキザサ リュウノヒゲ ワラビ ' +
+  'イヌタデ イヌビエ イヌビユ エノキグサ オギ オニシバ オヒシバ カサスゲ ガマ キツネノボタン ギシギシ クズ ケカモノハシ コウボウシバ シロツメクサ セリ ツルヨシ ネザサ ノチドメ ハマエンドウ ハマニガナ ハマニンニク ヒメジョオン ヒメムカシヨモギ ヘクソカズラ ミゾソバ ヤハズソウ ' +
+  'ハイゴケ コツボゴケ ヒノキゴケ オオスギゴケ タチゴケ シノブゴケ スナゴケ ホソバオキナゴケ イワダレゴケ タチハイゴケ'
+).split(/\s+/).filter(Boolean);
+
+VEG.buildSpeciesList = function (syntaxa) {
+  const set = new Set(VEG.SPECIES_EXTRA);
+  (syntaxa || VEG.SYNTAXA).forEach(s => [].concat(s.char, s.diff, s.comp).forEach(n => n && set.add(n)));
+  Object.values(VEG.LATE_TREES).forEach(a => a.forEach(n => set.add(n)));
+  return Array.from(set).sort((a, b) => a.localeCompare(b, 'ja'));
+};
+
+VEG.ASPECTS = ['', 'N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW', '平坦'];
+VEG.TOPO = ['', '尾根', '斜面上部', '斜面中部', '斜面下部', '谷・沢沿い', '平地・台地', '低地・氾濫原', '湿地', '海岸砂丘', '岩場・崖'];
+VEG.SOIL = ['', '褐色森林土', '黒ボク土', '赤黄色土', 'ポドゾル', '未熟土・岩屑', 'グライ土・湿性土', '泥炭土', '砂質土', '人工改変土'];
+VEG.MOIST = ['', '乾性', 'やや乾性', '適潤', 'やや湿性', '湿性', '過湿・冠水'];
+VEG.IMPACT = ['', 'なし（自然状態）', '伐採・択伐', '皆伐跡', '草刈り・採草', '火入れ', '放牧・踏圧', 'シカ食害', '植林', '耕作放棄', '造成・盛土', 'その他'];
+
+/* ===== analysis.js ===== */
+/* =========================================================
+   解析エンジン
+   - 植生表マトリックス作成
+   - 類似度（Bray-Curtis / Jaccard）とUPGMAクラスタリング
+   - 識別種の抽出（出現頻度＋φ係数）と表操作（並べ替え）
+   - 常在度表（総合常在度表）
+   - 群集参照DBとの照合（地域・植生帯を考慮）
+   ========================================================= */
+'use strict';
+
+window.VEG = window.VEG || {};
+VEG.Analysis = (function () {
+  const LAYER_ORDER = { T1: 0, T2: 1, S: 2, H: 3, M: 4 };
+
+  function keyOf(rec, merge) { return merge ? rec.sp : rec.sp + '|' + rec.layer; }
+  function labelOf(key) {
+    const [sp, layer] = key.split('|');
+    return { sp, layer: layer || '' };
+  }
+
+  /* マトリックス：keys（行）× relevés（列）。値 = {cover, soc, mid} */
+  function buildMatrix(releves, opts) {
+    const merge = !!(opts && opts.mergeLayers);
+    const rows = new Map();
+    releves.forEach((r, j) => {
+      (r.records || []).forEach(rec => {
+        if (!rec.sp) return;
+        const k = keyOf(rec, merge);
+        if (!rows.has(k)) rows.set(k, new Array(releves.length).fill(null));
+        const mid = VEG.coverMid(rec.cover);
+        const cur = rows.get(k)[j];
+        if (!cur) rows.get(k)[j] = { cover: rec.cover, soc: rec.soc, mid };
+        else {
+          // 層を統合する場合は独立重ね合わせで被度を合成し、表示は最大階級
+          const comb = 100 * (1 - (1 - cur.mid / 100) * (1 - mid / 100));
+          const better = mid > cur.mid ? { cover: rec.cover, soc: rec.soc } : { cover: cur.cover, soc: cur.soc };
+          rows.get(k)[j] = Object.assign(better, { mid: comb });
+        }
+      });
+    });
+    const keys = Array.from(rows.keys());
+    return { keys, rows, n: releves.length };
+  }
+
+  /* 類似度・距離 */
+  function distance(mat, a, b, method) {
+    let num = 0, den = 0, A = 0, B = 0, C = 0;
+    mat.keys.forEach(k => {
+      const row = mat.rows.get(k);
+      const x = row[a] ? row[a].mid : 0, y = row[b] ? row[b].mid : 0;
+      if (method === 'jaccard') {
+        if (x > 0 && y > 0) A++; else if (x > 0) B++; else if (y > 0) C++;
+      } else {
+        const xs = Math.sqrt(x), ys = Math.sqrt(y);
+        num += Math.abs(xs - ys); den += xs + ys;
+      }
+    });
+    if (method === 'jaccard') return (A + B + C) === 0 ? 0 : 1 - A / (A + B + C);
+    return den === 0 ? 0 : num / den;
+  }
+
+  /* UPGMA */
+  function upgma(mat, method) {
+    const n = mat.n;
+    if (n === 0) return null;
+    const D = [];
+    for (let i = 0; i < n; i++) { D[i] = []; for (let j = 0; j < n; j++) D[i][j] = i === j ? 0 : (j < i ? D[j][i] : distance(mat, i, j, method)); }
+    let clusters = [];
+    for (let i = 0; i < n; i++) clusters.push({ id: i, leaves: [i], height: 0, left: null, right: null });
+    const dist = (c1, c2) => {
+      let s = 0; c1.leaves.forEach(a => c2.leaves.forEach(b => { s += D[a][b]; }));
+      return s / (c1.leaves.length * c2.leaves.length);
+    };
+    while (clusters.length > 1) {
+      let best = [0, 1], bd = Infinity;
+      for (let i = 0; i < clusters.length; i++) for (let j = i + 1; j < clusters.length; j++) {
+        const d = dist(clusters[i], clusters[j]);
+        if (d < bd) { bd = d; best = [i, j]; }
+      }
+      const [i, j] = best;
+      const merged = { id: null, leaves: clusters[i].leaves.concat(clusters[j].leaves), height: bd, left: clusters[i], right: clusters[j] };
+      clusters = clusters.filter((_, k) => k !== i && k !== j);
+      clusters.push(merged);
+    }
+    return clusters[0];
+  }
+
+  /* 樹形図をk群に切断 → relevé index → group (0..k-1)。並び順は樹形図の葉順 */
+  function cutTree(root, k) {
+    if (!root) return { groups: [], order: [] };
+    let parts = [root];
+    while (parts.length < k) {
+      let idx = -1, h = -1;
+      parts.forEach((p, i) => { if (p.left && p.height > h) { h = p.height; idx = i; } });
+      if (idx < 0) break;
+      const p = parts[idx];
+      parts.splice(idx, 1, p.left, p.right);
+    }
+    const order = [];
+    (function walk(nd) { if (!nd.left) order.push(nd.id); else { walk(nd.left); walk(nd.right); } })(root);
+    const groups = [];
+    parts.forEach((p, g) => p.leaves.forEach(l => { groups[l] = g; }));
+    // 群番号を葉順に振り直す
+    const remap = new Map(); let c = 0;
+    order.forEach(l => { if (!remap.has(groups[l])) remap.set(groups[l], c++); });
+    return { groups: groups.map(g => remap.get(g)), order };
+  }
+
+  /* φ係数（在/不在） */
+  function phi(inGroupPresent, inGroupN, outPresent, outN) {
+    const a = inGroupPresent, b = outPresent, c = inGroupN - a, d = outN - b;
+    const den = Math.sqrt((a + b) * (c + d) * (a + c) * (b + d));
+    return den === 0 ? 0 : (a * d - b * c) / den;
+  }
+
+  /* 識別種の抽出 */
+  function differentials(mat, groups, opts) {
+    const minFreq = (opts && opts.minFreq) || 0.5;
+    const minPhi = (opts && opts.minPhi) || 0.3;
+    const maxOut = (opts && opts.maxOut != null) ? opts.maxOut : 0.35;
+    const G = groups.length ? Math.max.apply(null, groups) + 1 : 0;
+    const sizes = new Array(G).fill(0); groups.forEach(g => sizes[g]++);
+    const info = new Map();
+    mat.keys.forEach(k => {
+      const row = mat.rows.get(k);
+      const pres = new Array(G).fill(0); let tot = 0;
+      row.forEach((v, j) => { if (v) { pres[groups[j]]++; tot++; } });
+      const per = [];
+      for (let g = 0; g < G; g++) {
+        const fin = sizes[g] ? pres[g] / sizes[g] : 0;
+        const outN = mat.n - sizes[g], outP = tot - pres[g];
+        const fout = outN ? outP / outN : 0;
+        const p = phi(pres[g], sizes[g], outP, outN);
+        per.push({ g, fin, fout, phi: p, diff: G > 1 && fin >= minFreq && p >= minPhi && fout <= maxOut });
+      }
+      info.set(k, { total: tot, freq: tot / mat.n, per, diffGroups: per.filter(x => x.diff).map(x => x.g) });
+    });
+    return { info, sizes, G };
+  }
+
+  /* 並べ替え済み植生表（区分表）を作成 */
+  function sortedTable(releves, opts) {
+    const mat = buildMatrix(releves, opts);
+    const method = opts.method || 'bray';
+    let groups, order, tree = null;
+    if (opts.manualGroups && releves.every(r => r.group != null && r.group !== '')) {
+      const labels = Array.from(new Set(releves.map(r => String(r.group)))).sort();
+      groups = releves.map(r => labels.indexOf(String(r.group)));
+      order = releves.map((_, i) => i).sort((a, b) => groups[a] - groups[b] || a - b);
+    } else {
+      tree = upgma(mat, method);
+      const cut = cutTree(tree, Math.min(opts.k || 2, mat.n));
+      groups = cut.groups; order = cut.order;
+      order = order.slice().sort((a, b) => groups[a] - groups[b] || order.indexOf(a) - order.indexOf(b));
+    }
+    const diff = differentials(mat, groups, opts);
+    const blocks = [];
+    // 単一群の識別種ブロック
+    for (let g = 0; g < diff.G; g++) {
+      const ks = mat.keys.filter(k => { const d = diff.info.get(k).diffGroups; return d.length === 1 && d[0] === g; })
+        .sort((a, b) => diff.info.get(b).per[g].phi - diff.info.get(a).per[g].phi);
+      blocks.push({ kind: 'diff', groups: [g], keys: ks, title: '群' + groupLabel(g) + 'の識別種' });
+    }
+    // 複数群に共通する識別種
+    const multi = mat.keys.filter(k => diff.info.get(k).diffGroups.length > 1);
+    const multiMap = new Map();
+    multi.forEach(k => { const sig = diff.info.get(k).diffGroups.join(','); if (!multiMap.has(sig)) multiMap.set(sig, []); multiMap.get(sig).push(k); });
+    multiMap.forEach((ks, sig) => blocks.push({ kind: 'diff', groups: sig.split(',').map(Number), keys: ks, title: '群' + sig.split(',').map(x => groupLabel(+x)).join('＋') + 'の識別種' }));
+    // 随伴種（頻度順、同頻度は層順）
+    const comp = mat.keys.filter(k => diff.info.get(k).diffGroups.length === 0)
+      .sort((a, b) => diff.info.get(b).total - diff.info.get(a).total || (LAYER_ORDER[labelOf(a).layer] || 0) - (LAYER_ORDER[labelOf(b).layer] || 0) || a.localeCompare(b, 'ja'));
+    blocks.push({ kind: 'comp', groups: [], keys: comp, title: '随伴種' });
+    return { mat, groups, order, tree, diff, blocks };
+  }
+
+  function groupLabel(g) { return String.fromCharCode(65 + g); }
+
+  function constancyClass(f) {
+    if (f <= 0) return '';
+    if (f <= 0.2) return 'I'; if (f <= 0.4) return 'II'; if (f <= 0.6) return 'III'; if (f <= 0.8) return 'IV'; return 'V';
+  }
+
+  /* 常在度表 */
+  function synoptic(result) {
+    const { mat, groups, diff } = result;
+    const rows = [];
+    result.blocks.forEach(b => b.keys.forEach(k => {
+      const row = mat.rows.get(k);
+      const cells = [];
+      for (let g = 0; g < diff.G; g++) {
+        const vals = []; row.forEach((v, j) => { if (v && groups[j] === g) vals.push(v.cover); });
+        const f = diff.sizes[g] ? vals.length / diff.sizes[g] : 0;
+        const order = VEG.COVER_SCALES.bb7.classes.map(c => c.v);
+        vals.sort((a, b) => order.indexOf(a) - order.indexOf(b));
+        cells.push({ cls: constancyClass(f), f, range: vals.length ? (vals[0] === vals[vals.length - 1] ? vals[0] : vals[0] + '-' + vals[vals.length - 1]) : '', phi: diff.info.get(k).per[g].phi });
+      }
+      rows.push({ key: k, block: b, cells });
+    }));
+    return rows;
+  }
+
+  /* ---------- 群集の同定（参照DBとの照合） ---------- */
+  function contextOf(r, settings) {
+    const pref = VEG.PREFS.find(p => p.name === r.pref);
+    const zone = r.zoneOverride || VEG.zoneOf(r.pref, r.elev, settings && settings.prefOverrides);
+    const sea = r.seaOverride || (pref ? pref.sea : '');
+    return { pref, zone, sea, region: pref ? pref.region : '' };
+  }
+
+  const ADJ = { ST: ['WE'], WE: ['CD', 'ST'], CD: ['WE', 'SA', 'MX'], MX: ['CD', 'SA'], SA: ['CD', 'MX', 'AL'], AL: ['SA'] };
+
+  function identify(r, syntaxa, settings) {
+    const ctx = contextOf(r, settings);
+    const present = new Map();
+    (r.records || []).forEach(rec => {
+      const m = VEG.coverMid(rec.cover);
+      present.set(rec.sp, Math.max(present.get(rec.sp) || 0, m));
+    });
+    if (!present.size) return { ctx, results: [] };
+    // 最上層の優占種
+    const topLayer = ['T1', 'T2', 'S', 'H', 'M'].find(L => (r.records || []).some(x => x.layer === L));
+    let dominant = null, dm = -1;
+    (r.records || []).filter(x => x.layer === topLayer).forEach(x => { const m = VEG.coverMid(x.cover); if (m > dm) { dm = m; dominant = x.sp; } });
+
+    const results = syntaxa.map(s => {
+      const w = (sp, base) => {
+        if (!present.has(sp)) return 0;
+        const c = present.get(sp);
+        return base * (0.6 + 0.4 * Math.min(1, Math.log10(1 + c) / Math.log10(88.5)));
+      };
+      let got = 0, max = 0;
+      const hitChar = [], hitDiff = [], miss = [];
+      (s.char || []).forEach(sp => { max += 3; const v = w(sp, 3); got += v; (v ? hitChar : miss).push(sp); });
+      (s.diff || []).forEach(sp => { max += 1.5; const v = w(sp, 1.5); got += v; if (v) hitDiff.push(sp); });
+      (s.comp || []).forEach(sp => { max += 0.5; got += w(sp, 0.5); });
+      let floristic = max ? got / max : 0;
+      if (dominant && s.char && s.char[0] === dominant) floristic = Math.min(1, floristic + 0.15);
+      // 地理・植生帯の整合
+      let geo = 1; const flags = [];
+      if (ctx.zone) {
+        if (s.zones.includes(ctx.zone)) geo *= 1;
+        else if ((ADJ[ctx.zone] || []).some(z => s.zones.includes(z))) { geo *= 0.75; flags.push('隣接植生帯'); }
+        else { geo *= 0.4; flags.push('植生帯が不一致'); }
+      }
+      if (s.regions && s.regions.length && ctx.region && !s.regions.includes(ctx.region)) { geo *= 0.6; flags.push('分布域外の地方'); }
+      if (s.sea && ctx.sea && s.sea !== ctx.sea) { geo *= 0.8; flags.push(s.sea === 'J' ? '日本海側型' : '太平洋側型'); }
+      const score = floristic * geo;
+      return { s, score, floristic, geo, hitChar, hitDiff, miss, flags };
+    }).filter(x => x.hitChar.length + x.hitDiff.length > 0)
+      .sort((a, b) => b.score - a.score);
+    return { ctx, dominant, results: results.slice(0, 6) };
+  }
+
+  /* 地域の候補群集リスト（調査前の参照用） */
+  function candidatesFor(prefName, elev, syntaxa, settings) {
+    const pref = VEG.PREFS.find(p => p.name === prefName);
+    if (!pref) return [];
+    const zone = VEG.zoneOf(prefName, elev, settings && settings.prefOverrides);
+    return syntaxa.filter(s => s.zones.includes(zone) && (!s.regions.length || s.regions.includes(pref.region)))
+      .map(s => ({ s, seaMatch: !s.sea || s.sea === pref.sea }))
+      .sort((a, b) => (b.s.stage - a.s.stage) || (b.seaMatch - a.seaMatch));
+  }
+
+  return { buildMatrix, distance, upgma, cutTree, differentials, sortedTable, synoptic, identify, contextOf, candidatesFor, groupLabel, labelOf, constancyClass };
+})();
+
+/* ===== succession.js ===== */
+/* =========================================================
+   遷移予測
+   現存植生（同定結果＋階層構造）→ 遷移段階を推定し、
+   植生帯・立地・管理シナリオに応じて年数ごとの到達植生を示す。
+   年数は一般的な文献値をもとにした目安（[早い, 標準, 遅い]）。
+   ========================================================= */
+'use strict';
+
+window.VEG = window.VEG || {};
+VEG.Succession = (function () {
+
+  function layerCover(r, L) {
+    const l = (r.layers || {})[L];
+    if (l && l.cov !== '' && l.cov != null) return Number(l.cov) || 0;
+    let s = 0; (r.records || []).filter(x => x.layer === L).forEach(x => { s = 100 * (1 - (1 - s / 100) * (1 - VEG.coverMid(x.cover) / 100)); });
+    return s;
+  }
+  function spCover(r, names, layers) {
+    let s = 0;
+    (r.records || []).forEach(x => { if (names.includes(x.sp) && (!layers || layers.includes(x.layer))) s = Math.max(s, VEG.coverMid(x.cover)); });
+    return s;
+  }
+  function dominantOf(r, L) {
+    let d = null, m = -1;
+    (r.records || []).filter(x => x.layer === L).forEach(x => { const v = VEG.coverMid(x.cover); if (v > m) { m = v; d = x.sp; } });
+    return d;
+  }
+
+  /* 構造から段階を推定 */
+  function structuralStage(r, zone) {
+    const t = Math.max(layerCover(r, 'T1'), layerCover(r, 'T2'));
+    const s = layerCover(r, 'S');
+    const late = VEG.LATE_TREES[zone] || [];
+    const lateTop = spCover(r, late, ['T1', 'T2']);
+    if (t >= 30) {
+      if (lateTop >= 37.5) return 7;
+      if (lateTop >= 5) return 6;
+      return 5;
+    }
+    if (s >= 30) return 4;
+    const h = dominantOf(r, 'H');
+    if (['ススキ', 'チシマザサ', 'クマイザサ', 'ミヤコザサ', 'アズマネザサ', 'ネザサ', 'トダシバ'].includes(h)) return 3;
+    const annual = ['メヒシバ', 'エノコログサ', 'アキノエノコログサ', 'オヒシバ', 'ベニバナボロギク', 'ダンドボロギク', 'ヒメムカシヨモギ', 'イヌビエ', 'エノキグサ'];
+    if (h && annual.includes(h)) return 1;
+    if ((r.records || []).length === 0) return 0;
+    return 2;
+  }
+
+  /* 段階に対応する群集名（地域DBから選択） */
+  function communityFor(stage, ctx, syntaxa, site) {
+    const pool = syntaxa.filter(s => s.stage === stage && s.zones.includes(ctx.zone) && s.type !== 'plantation' && s.type !== 'edaphic' &&
+      (!s.regions.length || s.regions.includes(ctx.region)));
+    let best = null, bs = -1;
+    pool.forEach(s => {
+      let sc = 1;
+      if (s.sea && ctx.sea === s.sea) sc += 1; else if (s.sea && ctx.sea && s.sea !== ctx.sea) sc -= 0.8;
+      if (site.dry && /アカマツ/.test(s.ja)) sc += 1.2;
+      if (!site.dry && /アカマツ/.test(s.ja)) sc -= 0.5;
+      if (s.regions.length) sc += 0.3; // 地方限定の群集を優先
+      if (sc > bs) { bs = sc; best = s; }
+    });
+    return best;
+  }
+
+  function climaxFor(ctx, syntaxa, site, r) {
+    const pool = syntaxa.filter(s => s.type === 'climax' && s.zones.includes(ctx.zone) && (!s.regions.length || s.regions.includes(ctx.region)));
+    const present = new Set((r.records || []).map(x => x.sp));
+    let ranked = pool.map(s => {
+      let sc = 0; const why = [];
+      if (s.zones[0] === ctx.zone) sc += 0.5;
+      if (s.sea) { if (s.sea === ctx.sea) { sc += 1; } else sc -= 1.5; }
+      const hits = s.char.concat(s.diff).filter(x => present.has(x));
+      sc += hits.length * 0.8; if (hits.length) why.push('現地に構成種：' + hits.join('、'));
+      if (/タブノキ/.test(s.ja)) { if (site.wet || site.coastal) { sc += 1.2; why.push('湿潤・沿海立地'); } else sc -= 0.3; }
+      if (/モミ|ウラジロガシ/.test(s.ja)) { if (site.ridge || site.high) { sc += 1; why.push('尾根・暖温帯上部'); } else sc -= 0.3; }
+      if (/シラカシ/.test(s.ja) && ctx.region === '関東' && !site.coastal) { sc += 0.8; why.push('関東内陸'); }
+      if (/イヌブナ/.test(s.ja) && !site.lowerCD) sc -= 0.6;
+      if (/ハイマツ/.test(s.ja) && ctx.zone !== 'AL') sc -= 2;
+      return { s, sc, why };
+    }).sort((a, b) => b.sc - a.sc);
+    return ranked;
+  }
+
+  const SCENARIOS = {
+    none: { name: '放置（自然遷移）' },
+    mow: { name: '草刈り・採草を継続' },
+    clearcut: { name: '皆伐後に放置（萌芽更新）' },
+    deer: { name: 'シカ高密度（食害継続）' }
+  };
+
+  function predict(r, idResult, syntaxa, settings, scenario) {
+    const ctx = VEG.Analysis.contextOf(r, settings);
+    const zone = ctx.zone || 'WE';
+    const notes = [];
+    const site = {
+      ridge: /尾根|斜面上部|岩場/.test(r.topo || ''),
+      wet: /谷|斜面下部|湿地|低地/.test(r.topo || '') || /湿性|過湿/.test(r.moist || ''),
+      wetland: /湿地/.test(r.topo || '') || /過湿/.test(r.moist || '') || /グライ|泥炭/.test(r.soil || ''),
+      coastal: /海岸/.test(r.topo || ''),
+      dry: /乾性/.test(r.moist || '') || /未熟土/.test(r.soil || '') || /尾根|岩場/.test(r.topo || ''),
+      steep: Number(r.slope) >= 35,
+      high: false, lowerCD: false
+    };
+    const p = ctx.pref;
+    if (p && zone === 'WE' && Number(r.elev) > p.ev * 0.6) site.high = true;
+    if (p && zone === 'CD' && Number(r.elev) < p.ev + 300) site.lowerCD = true;
+
+    // 現在の段階
+    const top = idResult && idResult.results && idResult.results[0];
+    const sStage = structuralStage(r, zone);
+    let stage = sStage, current = null;
+    if (top && top.score >= 0.3) {
+      current = top.s;
+      stage = top.s.stage;
+      if (Math.abs(stage - sStage) >= 2) notes.push(`同定群集（${top.s.ja}）の典型段階と、階層構造からの推定（${VEG.STAGES[sStage].short}）が異なります。構造推定を優先しました。`);
+      if (Math.abs(stage - sStage) >= 2) stage = sStage;
+    }
+
+    // 後継樹（極相構成種）の更新状況
+    const late = VEG.LATE_TREES[zone] || [];
+    const regen = spCover(r, late, ['T2', 'S', 'H']);
+    const regenSp = Array.from(new Set((r.records || []).filter(x => late.includes(x.sp) && ['T2', 'S', 'H'].includes(x.layer)).map(x => x.sp)));
+    let factor = 1;
+    if (stage >= 4 && stage <= 6) {
+      if (regen >= 17.5) { factor *= 0.7; notes.push(`下層に極相構成種（${regenSp.join('、')}）が多く、遷移は速く進む見込みです。`); }
+      else if (regen > 0) { factor *= 0.85; notes.push(`下層に極相構成種（${regenSp.join('、')}）が侵入しています。`); }
+      else if (stage >= 5) { factor *= 1.3; notes.push('下層に極相構成種が見られません。種子供給源（近隣の自然林）からの距離が遷移速度を左右します。'); }
+    }
+    // 遷移停滞要因
+    const arrest = (r.records || []).filter(x => VEG.ARRESTING.includes(x.sp) && ['S', 'H'].includes(x.layer) && VEG.coverMid(x.cover) >= 62.5);
+    if (arrest.length) { factor *= 1.8; notes.push(`林床・低木層で${arrest.map(x => x.sp).join('、')}が高被度（4以上）です。ササ・つる植物の密生は後継樹の定着を妨げ、遷移が停滞しやすくなります。`); }
+    if (site.dry) { factor *= 1.25; notes.push('乾性・未熟な立地のため遷移はやや遅く、アカマツ林などの土地的極相に留まる可能性があります。'); }
+    if (site.steep) { factor *= 1.15; notes.push('急傾斜のため表土移動が起こりやすく、遷移が遅れる傾向があります。'); }
+    if (/シカ/.test(r.impact || '')) { notes.push('シカ食害の記録があります。シナリオ「シカ高密度」も確認してください。'); }
+
+    factor = Math.min(3, factor);
+    // 特殊系列（湿地・海岸）
+    let series = 'zonal';
+    if (site.wetland) series = 'wetland';
+    else if (site.coastal && stage <= 3) series = 'coastal';
+
+    const Y = VEG.STAGE_YEARS[zone] || VEG.STAGE_YEARS.WE;
+    const maxStage = zone === 'AL' ? 3 : 7;
+    let path = [];
+    let startStage = stage;
+    let capStage = maxStage;
+    let scen = scenario || 'none';
+
+    if (scen === 'mow') { capStage = Math.min(maxStage, Math.max(3, Math.min(stage, 3))); if (stage > 3) notes.push('現状が既に林分のため、草刈り継続シナリオは林床管理として扱います（段階は維持）。'); if (stage > 3) capStage = stage; }
+    if (scen === 'clearcut') {
+      if (stage >= 5) { startStage = 1; notes.push('皆伐後は一年生草本→先駆低木を経て、切株からの萌芽により陽樹二次林へ早く戻ります。'); }
+    }
+    if (scen === 'deer') { capStage = Math.min(stage, 5); factor *= 1.6; notes.push('シカの採食圧が続くと林床植生が衰退し、不嗜好性植物（イワヒメワラビ、シロダモ、アセビ等）が優占して更新が妨げられます。'); }
+
+    const climaxRank = climaxFor(ctx, syntaxa, site, r);
+    const climax = climaxRank[0] ? climaxRank[0].s : null;
+
+    function nameFor(st) {
+      if (series === 'wetland') {
+        if (st <= 3) return { ja: 'ヨシ群集など湿生草本群落', s: syntaxa.find(s => s.id === 'phragmitetum') };
+        if (st <= 5) return { ja: 'ヤナギ・ハンノキ湿生林', s: syntaxa.find(s => s.id === 'alnus-japonica') };
+        return { ja: 'ハンノキ群落（立地的極相：地下水位次第）', s: syntaxa.find(s => s.id === 'alnus-japonica') };
+      }
+      if (series === 'coastal') {
+        if (st <= 2) return { ja: 'ハマボウフウ－コウボウムギ群集（前砂丘）', s: syntaxa.find(s => s.id === 'glehnio-caricetum') };
+        if (st <= 4) return { ja: 'ハマゴウ群落（後砂丘）', s: syntaxa.find(s => s.id === 'vitex-rotundifolia') };
+        if (st <= 6) return { ja: 'トベラ－マサキ群落・クロマツ林', s: syntaxa.find(s => s.id === 'pittosporum-euonymus') };
+      }
+      if (st === startStage && current && scen !== 'clearcut' && current.stage === st) return { ja: current.ja, s: current };
+      if (st === 7 && climax) return { ja: climax.ja, s: climax };
+      if (st === 6 && climax) return { ja: VEG.STAGES[6].short + '（' + climax.char[0] + '等の侵入）', s: null };
+      const s = communityFor(st, Object.assign({}, ctx, { zone }), syntaxa, site);
+      return s ? { ja: s.ja, s } : { ja: VEG.STAGES[st].name, s: null };
+    }
+
+    // 時系列
+    let acc = [0, 0, 0];
+    const yearsInto = Number(r.yearsSince) || 0;
+    for (let st = startStage; st <= capStage; st++) {
+      const nm = nameFor(st);
+      path.push({ stage: st, name: nm.ja, syntaxon: nm.s, start: acc.slice() });
+      if (st === capStage) break;
+      const d = Y[st].map(v => v * factor);
+      // 現段階は経過分を差し引く（同定段階に入ってからの年数が不明なため半分を仮定）
+      if (st === startStage) {
+        const used = scen === 'clearcut' ? 0 : Math.min(yearsInto, d[1]) * 0.5;
+        acc = [acc[0] + Math.max(0, d[0] - used), acc[1] + Math.max(0, d[1] - used), acc[2] + Math.max(0, d[2] - used)];
+      } else acc = [acc[0] + d[0], acc[1] + d[1], acc[2] + d[2]];
+    }
+    // 萌芽更新（皆伐）では二次林までを短縮
+    if (scen === 'clearcut') {
+      const p5 = path.find(p => p.stage === 5);
+      const saved = p5 ? p5.start.map(v => v * 0.4) : [0, 0, 0];
+      path.forEach(p => { p.start = p.stage <= 5 ? p.start.map(v => v * 0.6) : p.start.map((v, i) => v - saved[i]); });
+    }
+
+    function at(years) {
+      const pick = idx => { let r0 = path[0]; path.forEach(p => { if (p.start[idx] <= years) r0 = p; }); return r0; };
+      return { early: pick(0), typical: pick(1), late: pick(2) };
+    }
+
+    if (stage === 7 && scen === 'none') notes.push('現状は極相林（潜在自然植生に近い林分）と判定されました。大きな攪乱がなければこの植生が持続し、ギャップ更新で維持されます。');
+    if (zone === 'AL') notes.push('高山帯では森林への遷移は起こらず、草本・矮性低木群落が持続します。');
+    return {
+      ctx: Object.assign({}, ctx, { zone }), stage, structuralStage: sStage, current, path, at, notes,
+      factor, climax, climaxRank: climaxRank.slice(0, 3), regenSp, series, scenario: scen
+    };
+  }
+
+  return { predict, structuralStage, SCENARIOS };
+})();
+
+/* ===== sample.js ===== */
+/* 試用サンプル（架空データ：千葉県房総丘陵を想定） */
+'use strict';
+window.VEG = window.VEG || {};
+VEG.sampleReleves = function () {
+  // 表記: "層:種名:被度:群度"
+  const mk = (code, site, lat, lng, elev, slope, aspect, topo, moist, plotType, size, area, impact, years, layers, list) => ({
+    id: 'smp-' + code, code, date: '2026-06-1' + code.slice(-1), observer: 'サンプル', site, pref: '千葉県',
+    lat, lng, elev, slope, aspect, topo, soil: '褐色森林土', moist, plotType, size, area, impact, yearsSince: years,
+    notes: '試用のための架空データです。', include: true, group: '',
+    layers, records: list.map(s => { const [layer, sp, cover, soc] = s.split(':'); return { sp, layer, cover, soc }; }),
+    createdAt: Date.now(), updatedAt: Date.now()
+  });
+  const L = (t1, t2, s, h, m) => ({ T1: { h: t1[0], cov: t1[1] }, T2: { h: t2[0], cov: t2[1] }, S: { h: s[0], cov: s[1] }, H: { h: h[0], cov: h[1] }, M: { h: '', cov: m } });
+  return [
+    mk('S01', '清澄 社叢', 35.162, 140.148, 210, 25, 'NE', '斜面中部', '適潤', 'forest', '15×15', 225, 'なし（自然状態）', '',
+      L([18, 85], [9, 30], [3, 25], [0.6, 30], 5),
+      ['T1:スダジイ:5:5', 'T1:タブノキ:1:1', 'T2:ヤブツバキ:2:2', 'T2:ヒサカキ:1:1', 'T2:シロダモ:1:1', 'S:アオキ:2:2', 'S:ヤブツバキ:1:1', 'S:ネズミモチ:1:1', 'S:シロダモ:+:1', 'H:ヤブコウジ:2:3', 'H:テイカカズラ:2:3', 'H:ベニシダ:1:2', 'H:ジャノヒゲ:1:2', 'H:ヤブラン:+:1', 'H:スダジイ:+:1']),
+    mk('S02', '清澄 尾根下', 35.158, 140.152, 260, 30, 'E', '斜面上部', 'やや乾性', 'forest', '15×15', 225, 'なし（自然状態）', '',
+      L([16, 80], [8, 35], [3, 30], [0.5, 25], 5),
+      ['T1:スダジイ:4:4', 'T1:アカガシ:2:2', 'T2:サカキ:2:2', 'T2:ヒサカキ:2:2', 'S:ヤブツバキ:2:2', 'S:アオキ:1:1', 'S:シキミ:1:1', 'H:ヤブコウジ:2:3', 'H:テイカカズラ:2:3', 'H:ベニシダ:1:2', 'H:ジャノヒゲ:+:2', 'H:サカキ:+:1']),
+    mk('S03', '養老渓谷 谷部', 35.255, 140.155, 120, 15, 'N', '谷・沢沿い', 'やや湿性', 'forest', '20×15', 300, 'なし（自然状態）', '',
+      L([20, 85], [10, 30], [3, 35], [0.8, 45], 10),
+      ['T1:タブノキ:4:4', 'T1:スダジイ:2:2', 'T2:ヤブニッケイ:2:2', 'T2:シロダモ:1:1', 'S:アオキ:3:3', 'S:ヤツデ:1:1', 'S:ヤブツバキ:1:1', 'H:イノデ:3:3', 'H:ホソバカナワラビ:2:3', 'H:ベニシダ:1:2', 'H:テイカカズラ:1:2', 'H:ヤブコウジ:1:2', 'H:ジャノヒゲ:+:1']),
+    mk('S04', '市原 里山', 35.402, 140.175, 80, 10, 'S', '斜面中部', '適潤', 'forest', '10×10', 100, '伐採・択伐', 40,
+      L([14, 80], [7, 25], [3, 45], [0.6, 55], 5),
+      ['T1:コナラ:4:4', 'T1:クヌギ:2:2', 'T1:ヤマザクラ:1:1', 'T2:エゴノキ:2:2', 'S:アズマネザサ:3:4', 'S:ヒサカキ:1:1', 'S:シラカシ:1:1', 'S:ガマズミ:1:1', 'S:ムラサキシキブ:+:1', 'H:シラヤマギク:1:2', 'H:ジャノヒゲ:1:2', 'H:ヤブコウジ:+:1', 'H:ヤマツツジ:+:1']),
+    mk('S05', '市原 雑木林', 35.405, 140.171, 90, 12, 'SW', '斜面上部', 'やや乾性', 'forest', '10×10', 100, '伐採・択伐', 35,
+      L([13, 75], [6, 20], [2.5, 55], [0.5, 40], 3),
+      ['T1:コナラ:4:4', 'T1:アカマツ:1:1', 'T2:エゴノキ:1:1', 'T2:ヤマウルシ:1:1', 'S:アズマネザサ:4:4', 'S:ヤマツツジ:1:2', 'S:ネジキ:+:1', 'S:ガマズミ:1:1', 'H:シラヤマギク:1:2', 'H:ジャノヒゲ:+:2', 'H:ワラビ:+:1']),
+    mk('S06', '大多喜 二次林', 35.288, 140.24, 110, 18, 'W', '斜面中部', '適潤', 'forest', '10×10', 100, '伐採・択伐', 45,
+      L([15, 85], [8, 35], [3, 40], [0.6, 35], 5),
+      ['T1:コナラ:4:4', 'T1:クヌギ:1:1', 'T2:エゴノキ:2:2', 'T2:シロダモ:1:1', 'S:アズマネザサ:2:3', 'S:アオキ:2:2', 'S:ヒサカキ:1:1', 'S:スダジイ:1:1', 'S:ヤブツバキ:1:1', 'H:ジャノヒゲ:1:2', 'H:テイカカズラ:1:2', 'H:シラヤマギク:+:1', 'H:ベニシダ:+:1']),
+    mk('S07', '鹿野山 法面草地', 35.25, 139.95, 300, 20, 'S', '斜面中部', '適潤', 'grass', '2×2', 4, '草刈り・採草', 15,
+      L(['', ''], ['', ''], ['', ''], [1.4, 95], ''),
+      ['H:ススキ:4:4', 'H:アズマネザサ:2:3', 'H:ワラビ:1:2', 'H:ツリガネニンジン:1:1', 'H:ヤマハギ:1:1', 'H:ヨモギ:+:1', 'H:ノガリヤス:1:2', 'H:ワレモコウ:+:1']),
+    mk('S08', '鹿野山 採草地', 35.252, 139.948, 320, 15, 'SE', '平地・台地', '適潤', 'grass', '2×2', 4, '草刈り・採草', 20,
+      L(['', ''], ['', ''], ['', ''], [1.3, 90], ''),
+      ['H:ススキ:4:4', 'H:トダシバ:2:3', 'H:ワレモコウ:1:1', 'H:オミナエシ:+:1', 'H:ネコハギ:1:2', 'H:ツリガネニンジン:1:1', 'H:アズマネザサ:1:2', 'H:ヨモギ:+:1'])
+  ];
+};
+
+/* ===== app.js ===== */
+/* =========================================================
+   植生野帳 — アプリ本体（画面・保存・入出力）
+   ========================================================= */
+'use strict';
+(function () {
+  const VERSION = '1.0.0';
+  const KEY = 'vegsurvey.v1';
+  const $ = (s, el) => (el || document).querySelector(s);
+  const $$ = (s, el) => Array.from((el || document).querySelectorAll(s));
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const view = $('#view');
+  const GROUP_COLORS = ['--g0', '--g1', '--g2', '--g3', '--g4', '--g5', '--g6', '--g7'];
+  const gColor = g => `var(${GROUP_COLORS[g % GROUP_COLORS.length]})`;
+  const LAYER_IDS = VEG.LAYERS.map(l => l.id);
+  const layerName = id => (VEG.LAYERS.find(l => l.id === id) || {}).name || id;
+
+  /* ---------------- 保存 ---------------- */
+  function defaults() {
+    return {
+      releves: [], features: [], recent: [],
+      settings: {
+        scale: 'bb7', theme: 'auto', observer: '', prefOverrides: {}, customSyntaxa: [], replaceDB: false,
+        table: { merge: false, method: 'bray', k: 2, manual: false, minFreq: 0.5, minPhi: 0.3, tab: 'sorted' }
+      }
+    };
+  }
+  function load() {
+    try {
+      const j = JSON.parse(localStorage.getItem(KEY));
+      if (j && Array.isArray(j.releves)) {
+        const d = defaults();
+        j.settings = Object.assign(d.settings, j.settings || {});
+        j.settings.table = Object.assign(d.settings.table, j.settings.table || {});
+        j.features = j.features || []; j.recent = j.recent || [];
+        return j;
+      }
+    } catch (e) { /* 初回または破損 */ }
+    return defaults();
+  }
+  let S = load();
+  let saveTimer = null;
+  function save(now) {
+    clearTimeout(saveTimer);
+    const run = () => {
+      try { localStorage.setItem(KEY, JSON.stringify(S)); }
+      catch (e) { toast('端末に保存できませんでした。設定 → バックアップを書き出すで退避してください。'); }
+    };
+    if (now) run(); else saveTimer = setTimeout(run, 250);
+  }
+  window.addEventListener('pagehide', () => save(true));
+
+  const syntaxa = () => (S.settings.replaceDB && S.settings.customSyntaxa.length) ? S.settings.customSyntaxa : VEG.SYNTAXA.concat(S.settings.customSyntaxa || []);
+  const scale = () => VEG.COVER_SCALES[S.settings.scale] || VEG.COVER_SCALES.bb7;
+  const included = () => S.releves.filter(r => r.include !== false);
+  const findR = id => S.releves.find(r => r.id === id);
+
+  function applyTheme() {
+    const t = S.settings.theme;
+    if (t === 'auto') document.documentElement.removeAttribute('data-theme');
+    else document.documentElement.setAttribute('data-theme', t);
+  }
+
+  function refreshSpeciesList() {
+    const set = new Set(VEG.buildSpeciesList(syntaxa()));
+    S.releves.forEach(r => (r.records || []).forEach(x => set.add(x.sp)));
+    $('#splist').innerHTML = Array.from(set).sort((a, b) => a.localeCompare(b, 'ja')).map(n => `<option value="${esc(n)}">`).join('');
+  }
+
+  /* ---------------- 共通UI ---------------- */
+  let toastTimer;
+  function toast(msg) {
+    const t = $('#toast'); t.textContent = msg; t.classList.add('show');
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 2600);
+  }
+  function download(name, text, type) {
+    const blob = new Blob([text], { type: type || 'application/octet-stream' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
+    document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+  }
+  const csvCell = v => { const s = String(v == null ? '' : v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+  const toCSV = rows => '\uFEFF' + rows.map(r => r.map(csvCell).join(',')).join('\r\n');
+  const today = () => new Date().toISOString().slice(0, 10);
+  const opts = (arr, sel) => arr.map(v => `<option value="${esc(v)}"${v === sel ? ' selected' : ''}>${esc(v || '—')}</option>`).join('');
+
+  function updateNet() {
+    const n = $('#netStatus');
+    if (navigator.onLine) { n.textContent = 'オンライン'; n.classList.remove('off'); }
+    else { n.textContent = 'オフライン'; n.classList.add('off'); }
+  }
+  window.addEventListener('online', updateNet); window.addEventListener('offline', updateNet);
+
+  function layerCov(r, L) {
+    const l = (r.layers || {})[L];
+    if (l && l.cov !== '' && l.cov != null) return Math.min(100, Number(l.cov) || 0);
+    let s = 0; (r.records || []).filter(x => x.layer === L).forEach(x => { s = 100 * (1 - (1 - s / 100) * (1 - VEG.coverMid(x.cover) / 100)); });
+    return s;
+  }
+  function strataHTML(r) {
+    return `<div class="strata" title="階層ごとの植被率">${LAYER_IDS.map(L => `<i data-l="${L}" style="--w:${layerCov(r, L).toFixed(0)}%" title="${layerName(L)} ${layerCov(r, L).toFixed(0)}%"></i>`).join('')}</div>`;
+  }
+  function newCode() {
+    let n = 0; S.releves.forEach(r => { const m = /(\d+)$/.exec(r.code || ''); if (m) n = Math.max(n, +m[1]); });
+    return 'R' + String(n + 1).padStart(3, '0');
+  }
+  function blankReleve(base) {
+    const r = {
+      id: 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), code: newCode(), date: today(),
+      observer: S.settings.observer || '', site: '', pref: '', lat: '', lng: '', elev: '', slope: '', aspect: '', topo: '', soil: '', moist: '',
+      plotType: 'forest', size: '', area: '', impact: '', yearsSince: '', notes: '', include: true, group: '',
+      layers: {}, records: [], createdAt: Date.now(), updatedAt: Date.now()
+    };
+    LAYER_IDS.forEach(L => { r.layers[L] = { h: '', cov: '' }; });
+    if (base) ['observer', 'site', 'pref', 'lat', 'lng', 'elev', 'slope', 'aspect', 'topo', 'soil', 'moist', 'plotType', 'impact', 'yearsSince'].forEach(k => { r[k] = base[k]; });
+    return r;
+  }
+  function topCommunity(r) {
+    const id = VEG.Analysis.identify(r, syntaxa(), S.settings);
+    const t = id.results[0];
+    return t && t.score >= 0.2 ? { name: t.s.ja, score: t.score, s: t.s } : null;
+  }
+
+  /* ---------------- ルーティング ---------------- */
+  function route() {
+    const h = (location.hash || '#list').slice(1);
+    const [name, arg] = h.split('/');
+    $$('.tabbar a').forEach(a => a.setAttribute('aria-current', (a.dataset.tab === name || (name === 'edit' && a.dataset.tab === 'list')) ? 'page' : 'false'));
+    if (mapObj) { mapObj.remove(); mapObj = null; }
+    view.onclick = null; view.onchange = null;
+    ({ list: renderList, edit: renderEdit, table: renderTable, analysis: renderAnalysis, map: renderMap, settings: renderSettings }[name] || renderList)(arg ? decodeURIComponent(arg) : null);
+    window.scrollTo(0, 0);
+  }
+  window.addEventListener('hashchange', route);
+
+  /* =========================================================
+     調査区一覧
+     ========================================================= */
+  function renderList() {
+    const rs = S.releves;
+    if (!rs.length) {
+      view.innerHTML = `
+        <h1>調査区</h1>
+        <div class="empty panel">
+          <p>まだ調査区がありません。現地で「新しい調査区」を作成し、階層ごとに出現種と被度・群度を記録します。</p>
+          <button class="btn primary" id="btnNew">新しい調査区</button>
+          <button class="btn" id="btnSample">サンプルデータで試す</button>
+        </div>
+        ${guideHTML()}`;
+      $('#btnNew').onclick = createNew;
+      $('#btnSample').onclick = () => { S.releves = S.releves.concat(VEG.sampleReleves()); save(true); refreshSpeciesList(); toast('サンプル8地点を読み込みました'); renderList(); };
+      return;
+    }
+    const inc = included().length;
+    view.innerHTML = `
+      <div class="spread"><h1>調査区</h1><button class="btn primary" id="btnNew">新しい調査区</button></div>
+      <p class="lead">${rs.length}地点（解析対象 ${inc}地点）。カード左の柱は上から高木・亜高木・低木・草本・コケ層の植被率です。</p>
+      <div class="row noprint" style="margin-bottom:12px">
+        <input type="search" id="q" placeholder="地点名・番号・種名で絞り込み" style="flex:1;min-width:200px">
+      </div>
+      <ul class="rlist" id="rlist"></ul>
+      <details class="panel" style="margin-top:14px"><summary>調査方法の目安</summary>${guideHTML(true)}</details>`;
+    $('#btnNew').onclick = createNew;
+    const draw = () => {
+      const q = $('#q').value.trim();
+      const list = rs.filter(r => !q || [r.code, r.site, r.pref].concat((r.records || []).map(x => x.sp)).some(v => String(v || '').includes(q)))
+        .sort((a, b) => String(a.code).localeCompare(String(b.code), 'ja', { numeric: true }));
+      $('#rlist').innerHTML = list.map(r => {
+        const c = topCommunity(r);
+        const nsp = new Set((r.records || []).map(x => x.sp)).size;
+        return `<li class="rcard${r.include === false ? ' excluded' : ''}" data-id="${esc(r.id)}">
+          ${strataHTML(r)}
+          <div>
+            <div class="spread"><span class="code">${esc(r.code)}</span><span class="meta">${esc(r.date)}</span></div>
+            <div>${esc(r.site || '（地点名なし）')}</div>
+            <div class="meta">${esc(r.pref || '都道府県未設定')}${r.elev !== '' ? '、標高' + esc(r.elev) + 'm' : ''}、${nsp}種${r.area ? '、' + esc(r.area) + 'm²' : ''}</div>
+            <div class="comm">${c ? '推定：' + esc(c.name) : '<span class="muted">推定群集なし</span>'}</div>
+            <div class="acts">
+              <a class="btn sm primary" href="#edit/${encodeURIComponent(r.id)}">記録を開く</a>
+              <a class="btn sm" href="#analysis/${encodeURIComponent(r.id)}">判定・遷移</a>
+              <button class="btn sm" data-act="clone">条件を引き継いで新規</button>
+              <label class="btn sm ghost"><input type="checkbox" data-act="inc" ${r.include !== false ? 'checked' : ''}> 解析に含める</label>
+            </div>
+          </div></li>`;
+      }).join('') || '<li class="muted">該当する調査区はありません。</li>';
+    };
+    draw();
+    $('#q').oninput = draw;
+    $('#rlist').onclick = e => {
+      const li = e.target.closest('.rcard'); if (!li) return;
+      const r = findR(li.dataset.id);
+      if (e.target.dataset.act === 'clone') { const n = blankReleve(r); S.releves.push(n); save(true); location.hash = '#edit/' + n.id; }
+    };
+    $('#rlist').onchange = e => {
+      if (e.target.dataset.act !== 'inc') return;
+      const r = findR(e.target.closest('.rcard').dataset.id); r.include = e.target.checked; save(); draw();
+    };
+  }
+  function createNew() { const r = blankReleve(); S.releves.push(r); save(true); location.hash = '#edit/' + r.id; }
+
+  function guideHTML(inner) {
+    const g = VEG.PLOT_GUIDE.map(p => `<tr><td>${esc(p.name)}</td><td>${p.min}〜${p.max} m²</td><td>${esc(p.note)}</td></tr>`).join('');
+    const body = `
+      <h3>調査区の設定</h3>
+      <p>相観・種組成が均質に見える場所を選び、林縁や踏み跡を避けます。面積は群落の種類に応じて揃えると比較しやすくなります。</p>
+      <table class="plain"><thead><tr><th>群落</th><th>面積</th><th>区画の例</th></tr></thead><tbody>${g}</tbody></table>
+      <h3>記録の順序</h3>
+      <p>環境情報（位置・標高・傾斜・方位・土壌）→ 階層ごとの高さと植被率 → 階層ごとに出現種と被度・群度、の順で記録します。同じ種が複数の層に出現する場合は層ごとに記録します。</p>
+      <h3>被度と群度</h3>
+      <table class="plain"><tbody>${VEG.COVER_SCALES.bb7.classes.map(c => `<tr><td><b>${c.v}</b></td><td>${esc(c.desc)}</td></tr>`).join('')}</tbody></table>
+      <p class="small muted" style="margin-top:8px">群度：${VEG.SOCIABILITY.map(s => s.v + '＝' + s.desc).join('、')}</p>`;
+    return inner ? body : `<section class="panel">${body}</section>`;
+  }
+
+  /* =========================================================
+     記録（調査区の編集）
+     ========================================================= */
+  const entry = { layer: 'H', cover: '+', soc: '1' };
+  function renderEdit(id) {
+    const r = findR(id);
+    if (!r) { location.hash = '#list'; return; }
+    LAYER_IDS.forEach(L => { r.layers = r.layers || {}; r.layers[L] = r.layers[L] || { h: '', cov: '' }; });
+    if (!scale().classes.some(c => c.v === entry.cover)) entry.cover = '+';
+    const plot = VEG.PLOT_GUIDE.find(p => p.type === r.plotType);
+    const f = (key, label, type, extra) => `<label class="f"><span>${label}</span><input type="${type || 'text'}" data-f="${key}" value="${esc(r[key])}" ${extra || ''}></label>`;
+    const sel = (key, label, arr) => `<label class="f"><span>${label}</span><select data-f="${key}">${opts(arr, r[key] || '')}</select></label>`;
+
+    view.innerHTML = `
+      <div class="spread"><h1>調査区 ${esc(r.code)}</h1>
+        <div class="row"><a class="btn sm" href="#analysis/${encodeURIComponent(r.id)}">判定・遷移を見る</a><a class="btn sm" href="#list">一覧へ</a></div></div>
+      <p class="lead">入力内容はその場で端末に保存されます。</p>
+      <div class="twocol">
+      <div>
+        <section class="panel">
+          <h2>基本情報</h2>
+          <div class="grid2">
+            ${f('code', '調査区番号')}${f('date', '調査日', 'date')}
+            ${f('observer', '調査者')}${f('site', '地点名')}
+            <label class="f"><span>都道府県</span><select data-f="pref">${opts([''].concat(VEG.PREFS.map(p => p.name)), r.pref)}</select></label>
+            ${f('elev', '標高 (m)', 'number', 'inputmode="decimal"')}
+            ${f('lat', '緯度', 'number', 'step="any" inputmode="decimal"')}${f('lng', '経度', 'number', 'step="any" inputmode="decimal"')}
+          </div>
+          <div class="row" style="margin-top:10px">
+            <button class="btn sm" id="btnGPS">現在地を取得</button>
+            <button class="btn sm" id="btnElev" title="国土地理院の標高APIを使用">標高・都道府県を取得（要通信）</button>
+            <span id="gpsMsg" class="small muted"></span>
+          </div>
+          <p class="small muted" id="zoneInfo" style="margin-top:8px"></p>
+        </section>
+
+        <section class="panel">
+          <h2>立地</h2>
+          <div class="grid2">
+            ${f('slope', '傾斜 (°)', 'number', 'inputmode="numeric"')}${sel('aspect', '方位', VEG.ASPECTS)}
+            ${sel('topo', '微地形', VEG.TOPO)}${sel('soil', '土壌', VEG.SOIL)}
+            ${sel('moist', '土壌の湿り', VEG.MOIST)}${sel('impact', '人為的影響', VEG.IMPACT)}
+            ${f('yearsSince', '攪乱・放棄後の年数（推定）', 'number', 'inputmode="numeric"')}
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>調査区</h2>
+          <div class="grid2">
+            <label class="f"><span>群落の種類</span><select data-f="plotType">${VEG.PLOT_GUIDE.map(p => `<option value="${p.type}"${p.type === r.plotType ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>
+            ${f('size', '区画（例 10×10）')}
+            ${f('area', '面積 (m²)', 'number', 'step="any" inputmode="decimal"')}
+          </div>
+          <p class="small" id="areaMsg" style="margin-top:8px"></p>
+        </section>
+
+        <section class="panel">
+          <h2>階層構造</h2>
+          <table class="plain"><thead><tr><th>階層</th><th>高さ (m)</th><th>植被率 (%)</th><th>優占種</th></tr></thead>
+          <tbody>${VEG.LAYERS.map(L => `<tr><td><b>${esc(L.name)}</b><br><span class="small muted">${esc(L.hint)}</span></td>
+            <td><input type="number" step="any" inputmode="decimal" data-lay="${L.id}" data-k="h" value="${esc(r.layers[L.id].h)}"></td>
+            <td><input type="number" inputmode="numeric" min="0" max="100" data-lay="${L.id}" data-k="cov" value="${esc(r.layers[L.id].cov)}"></td>
+            <td class="small" data-dom="${L.id}"></td></tr>`).join('')}</tbody></table>
+        </section>
+
+        <section class="panel">
+          <h2>メモ</h2>
+          <textarea data-f="notes" placeholder="群落の相観、周辺環境、写真番号など">${esc(r.notes)}</textarea>
+          <div class="row" style="margin-top:10px">
+            <button class="btn danger sm" id="btnDel">この調査区を削除</button>
+          </div>
+        </section>
+      </div>
+
+      <div>
+        <section class="panel">
+          <h2>出現種 <span class="small muted" id="spCount"></span></h2>
+          <div id="spList"></div>
+        </section>
+        <details class="panel" id="candPanel"><summary>この地域で想定される群集と主な種</summary><div id="cand"></div></details>
+        <section class="panel" id="idPreviewPanel"><h2>その場の判定</h2><div id="idPreview"></div></section>
+      </div>
+      </div>
+
+      <section class="panel entry" aria-label="出現種の入力">
+        <div class="seg layers" role="group" aria-label="階層" id="segLayer">${VEG.LAYERS.map(L => `<button type="button" data-l="${L.id}" aria-pressed="${entry.layer === L.id}" title="${esc(L.name)}">${esc(L.name.replace('層', ''))}</button>`).join('')}</div>
+        <div class="sprow-input" style="margin:8px 0">
+          <input type="text" id="spIn" list="splist" placeholder="種名（カタカナ）" autocomplete="off" enterkeyhint="done">
+          <button class="btn tape" id="btnAdd">追加</button>
+        </div>
+        <div class="entry-scales">
+          <div class="lbl">被度</div><div class="seg" id="segCover">${scale().classes.map(c => `<button type="button" data-v="${c.v}" title="${esc(c.desc)}" aria-pressed="${entry.cover === c.v}">${c.label}</button>`).join('')}</div>
+          <div class="lbl">群度</div><div class="seg" id="segSoc">${VEG.SOCIABILITY.map(s => `<button type="button" data-v="${s.v}" title="${esc(s.desc)}" aria-pressed="${entry.soc === s.v}">${s.v}</button>`).join('')}</div>
+        </div>
+        <div class="chips recent" id="recent"></div>
+      </section>`;
+
+    const touch = () => { r.updatedAt = Date.now(); save(); };
+    view.addEventListener('input', onInput);
+    view.addEventListener('change', onInput);
+    function onInput(e) {
+      const t = e.target;
+      if (t.dataset.f) {
+        r[t.dataset.f] = t.value; touch();
+        if (t.dataset.f === 'size') {
+          const m = /^\s*([\d.]+)\s*[x×*]\s*([\d.]+)\s*$/i.exec(t.value);
+          if (m) { r.area = +(m[1] * m[2]).toFixed(2); $('[data-f=area]').value = r.area; }
+        }
+        if (['pref', 'elev'].includes(t.dataset.f)) { zoneInfo(); cand(); idPreview(); }
+        if (['plotType', 'area', 'size'].includes(t.dataset.f)) areaMsg();
+        if (t.dataset.f === 'code') $('h1').textContent = '調査区 ' + t.value;
+      } else if (t.dataset.lay) {
+        r.layers[t.dataset.lay][t.dataset.k] = t.value; touch();
+      } else if (t.dataset.idx != null && t.dataset.k) {
+        r.records[+t.dataset.idx][t.dataset.k] = t.value; touch(); spList(); idPreview();
+      }
+    }
+    // 画面遷移時にリスナーを外す
+    const off = () => { view.removeEventListener('input', onInput); view.removeEventListener('change', onInput); window.removeEventListener('hashchange', off); };
+    window.addEventListener('hashchange', off);
+
+    function zoneInfo() {
+      const ctx = VEG.Analysis.contextOf(r, S.settings);
+      $('#zoneInfo').textContent = ctx.zone ? `推定植生帯：${VEG.ZONES[ctx.zone].name}（${ctx.region}、${ctx.sea === 'J' ? '日本海側' : '太平洋側'}型の目安）` : '都道府県と標高を入れると植生帯を推定します。';
+    }
+    function areaMsg() {
+      const g = VEG.PLOT_GUIDE.find(p => p.type === r.plotType); const a = Number(r.area);
+      const el = $('#areaMsg');
+      if (!g) { el.textContent = ''; return; }
+      if (!a) { el.innerHTML = `<span class="muted">${esc(g.name)}の目安：${g.min}〜${g.max} m²（${esc(g.note)}）</span>`; return; }
+      el.innerHTML = a < g.min ? `<span class="note" style="display:block">面積が${esc(g.name)}の目安（${g.min}〜${g.max} m²）より小さく、種数を過小評価する恐れがあります。</span>`
+        : a > g.max ? `<span class="note" style="display:block">面積が目安（${g.min}〜${g.max} m²）より大きく、異質な植生を含む恐れがあります。</span>`
+          : `<span class="muted">目安（${g.min}〜${g.max} m²）の範囲内です。</span>`;
+    }
+    function spList() {
+      const recs = r.records.map((x, i) => Object.assign({ i }, x));
+      $('#spCount').textContent = `${new Set(r.records.map(x => x.sp)).size}種、${r.records.length}記録`;
+      const cls = scale().classes.map(c => c.v);
+      $('#spList').innerHTML = LAYER_IDS.map(L => {
+        const rows = recs.filter(x => x.layer === L).sort((a, b) => VEG.coverMid(b.cover) - VEG.coverMid(a.cover));
+        const dom = rows[0] ? rows[0].sp : '';
+        const td = $(`[data-dom="${L}"]`); if (td) td.textContent = dom;
+        if (!rows.length) return '';
+        return `<div class="splayer" data-l="${L}"><h3>${esc(layerName(L))} <span class="small muted">${rows.length}種</span></h3>
+          ${rows.map(x => `<div class="sprow"><span>${esc(x.sp)}</span>
+            <select data-idx="${x.i}" data-k="cover" aria-label="${esc(x.sp)}の被度">${opts(cls.includes(x.cover) ? cls : cls.concat([x.cover]), x.cover)}</select>
+            <select data-idx="${x.i}" data-k="soc" aria-label="${esc(x.sp)}の群度">${opts(['1', '2', '3', '4', '5'], x.soc)}</select>
+            <button class="x" data-del="${x.i}" aria-label="${esc(x.sp)}を削除">×</button></div>`).join('')}</div>`;
+      }).join('') || '<p class="muted">下の入力欄で階層を選び、種名・被度・群度を入れて「追加」します。</p>';
+    }
+    function cand() {
+      const box = $('#cand');
+      if (!r.pref) { box.innerHTML = '<p class="muted small">都道府県を選ぶと、植生帯と地方に合う群集の候補を表示します。種名をタップすると入力欄に入ります。</p>'; return; }
+      const list = VEG.Analysis.candidatesFor(r.pref, r.elev, syntaxa(), S.settings);
+      box.innerHTML = list.map(({ s, seaMatch }) => `<div class="cand"><b>${esc(s.ja)}</b> <span class="badge">${esc(VEG.STAGES[s.stage].short)}</span>${seaMatch ? '' : '<span class="flag">' + (s.sea === 'J' ? '日本海側型' : '太平洋側型') + '</span>'}
+        <div class="chips" style="margin-top:6px">${s.char.map(n => `<button class="chip char" data-sp="${esc(n)}">${esc(n)}</button>`).join('')}${s.diff.map(n => `<button class="chip" data-sp="${esc(n)}">${esc(n)}</button>`).join('')}</div></div>`).join('') || '<p class="muted">該当する群集が参照DBにありません。</p>';
+    }
+    function idPreview() {
+      const res = VEG.Analysis.identify(r, syntaxa(), S.settings);
+      const box = $('#idPreview');
+      if (!res.results.length) { box.innerHTML = '<p class="muted small">種を記録すると、参照DBとの照合結果がここに出ます。</p>'; return; }
+      box.innerHTML = res.results.slice(0, 3).map((x, i) => `<div class="cand${i === 0 ? ' top' : ''}"><div class="spread"><b>${esc(x.s.ja)}</b><span>${Math.round(x.score * 100)}%</span></div>
+        <div class="bar"><i style="width:${Math.round(x.score * 100)}%"></i></div>
+        <div class="small muted">一致：${esc(x.hitChar.concat(x.hitDiff).join('、'))}${x.miss.length ? '／未確認：' + esc(x.miss.join('、')) : ''}</div></div>`).join('') +
+        `<p class="small muted" style="margin-top:6px">未確認の標徴種が調査区外に生えていないか確認すると、判定の精度が上がります。</p>`;
+    }
+    function recent() {
+      $('#recent').innerHTML = (S.recent || []).slice(0, 14).map(n => `<button class="chip" data-sp="${esc(n)}">${esc(n)}</button>`).join('');
+    }
+    function add() {
+      const sp = $('#spIn').value.trim().replace(/\s+/g, '');
+      if (!sp) { toast('種名を入力してください'); $('#spIn').focus(); return; }
+      const ex = r.records.find(x => x.sp === sp && x.layer === entry.layer);
+      if (ex) { ex.cover = entry.cover; ex.soc = entry.soc; toast(`${sp}（${layerName(entry.layer)}）を更新しました`); }
+      else { r.records.push({ sp, layer: entry.layer, cover: entry.cover, soc: entry.soc }); toast(`${sp}（${layerName(entry.layer)} ${entry.cover}・${entry.soc}）を追加しました`); }
+      S.recent = [sp].concat((S.recent || []).filter(n => n !== sp)).slice(0, 30);
+      touch(); spList(); idPreview(); recent();
+      $('#spIn').value = ''; entry.cover = '+'; entry.soc = '1';
+      $$('#segCover button').forEach(b => b.setAttribute('aria-pressed', b.dataset.v === entry.cover));
+      $$('#segSoc button').forEach(b => b.setAttribute('aria-pressed', b.dataset.v === entry.soc));
+      $('#spIn').focus();
+    }
+    const segBind = (sel, key, attr) => { $(sel).onclick = e => { const b = e.target.closest('button'); if (!b) return; entry[key] = b.dataset[attr]; $$(sel + ' button').forEach(x => x.setAttribute('aria-pressed', x === b)); }; };
+    segBind('#segLayer', 'layer', 'l'); segBind('#segCover', 'cover', 'v'); segBind('#segSoc', 'soc', 'v');
+    $('#btnAdd').onclick = add;
+    $('#spIn').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); add(); } };
+    view.onclick = e => {
+      const chip = e.target.closest('[data-sp]');
+      if (chip) { $('#spIn').value = chip.dataset.sp; $('#spIn').focus(); return; }
+      const del = e.target.closest('[data-del]');
+      if (del) { const i = +del.dataset.del; const x = r.records[i]; r.records.splice(i, 1); touch(); spList(); idPreview(); toast(`${x.sp}を削除しました`); }
+    };
+    $('#btnDel').onclick = () => {
+      if (!confirm(`調査区 ${r.code} を削除します。元に戻せません。`)) return;
+      S.releves = S.releves.filter(x => x !== r); save(true); location.hash = '#list';
+    };
+    $('#btnGPS').onclick = () => {
+      if (!navigator.geolocation) { $('#gpsMsg').textContent = 'この端末は位置情報に対応していません。'; return; }
+      $('#gpsMsg').textContent = '測位中…';
+      navigator.geolocation.getCurrentPosition(p => {
+        r.lat = +p.coords.latitude.toFixed(6); r.lng = +p.coords.longitude.toFixed(6);
+        $('[data-f=lat]').value = r.lat; $('[data-f=lng]').value = r.lng;
+        if (p.coords.altitude != null && r.elev === '') { r.elev = Math.round(p.coords.altitude); $('[data-f=elev]').value = r.elev; }
+        $('#gpsMsg').textContent = `誤差 約${Math.round(p.coords.accuracy)}m` + (p.coords.altitude != null ? '（GPS標高は誤差が大きいため要確認）' : '');
+        touch(); zoneInfo();
+      }, err => { $('#gpsMsg').textContent = '取得できませんでした：' + err.message; }, { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 });
+    };
+    $('#btnElev').onclick = async () => {
+      if (!r.lat || !r.lng) { toast('先に緯度・経度を入れてください'); return; }
+      if (!navigator.onLine) { toast('オフラインのため取得できません。標高は地形図などで確認してください。'); return; }
+      $('#gpsMsg').textContent = '取得中…';
+      try {
+        const e1 = await fetch(`https://cyberjapandata2.gsi.go.jp/general/dem/scripts/getelevation.php?lon=${r.lng}&lat=${r.lat}&outtype=JSON`).then(x => x.json());
+        if (typeof e1.elevation === 'number') { r.elev = Math.round(e1.elevation); $('[data-f=elev]').value = r.elev; }
+        const g = await fetch(`https://mreversegeocoder.gsi.go.jp/reverse-geocoder/LonLatToAddress?lat=${r.lat}&lon=${r.lng}`).then(x => x.json());
+        const cd = g && g.results && g.results.muniCd ? String(g.results.muniCd).padStart(5, '0') : '';
+        if (cd) { const p = VEG.PREFS[parseInt(cd.slice(0, 2), 10) - 1]; if (p) { r.pref = p.name; $('[data-f=pref]').value = p.name; } }
+        $('#gpsMsg').textContent = '国土地理院のデータから取得しました';
+        touch(); zoneInfo(); cand(); idPreview();
+      } catch (err) { $('#gpsMsg').textContent = '取得に失敗しました。通信状況を確認してください。'; }
+    };
+    zoneInfo(); areaMsg(); spList(); cand(); idPreview(); recent();
+  }
+
+  /* =========================================================
+     植生表
+     ========================================================= */
+  let lastTable = null;
+  function computeTable() {
+    const rs = included();
+    const t = S.settings.table;
+    if (rs.length < 1) return null;
+    const res = VEG.Analysis.sortedTable(rs, { mergeLayers: t.merge, method: t.method, k: Math.max(1, Math.min(t.k, rs.length)), manualGroups: t.manual, minFreq: +t.minFreq, minPhi: +t.minPhi });
+    res.releves = rs;
+    lastTable = res;
+    return res;
+  }
+  function renderTable() {
+    const rs = included();
+    if (rs.length < 2) {
+      view.innerHTML = `<h1>植生表</h1><div class="empty panel"><p>植生表を作るには、解析に含める調査区が2地点以上必要です（現在 ${rs.length}地点）。</p><a class="btn primary" href="#list">調査区へ</a></div>`;
+      return;
+    }
+    const t = S.settings.table;
+    view.innerHTML = `
+      <h1>植生表</h1>
+      <p class="lead">素表から、調査区を類似度で群に分け、群ごとの識別種をまとめた区分表を作ります。群数や閾値を変えて、まとまりの良い区分を探してください。</p>
+      <section class="panel noprint">
+        <div class="grid2">
+          <label class="f"><span>表の種類</span><select id="tTab">${opts(['raw', 'sorted', 'synoptic', 'dendro'], t.tab).replace(/>raw</, '>素表（出現種リスト）<').replace(/>sorted</, '>区分表（並べ替え済み）<').replace(/>synoptic</, '>常在度表<').replace(/>dendro</, '>樹形図（類似度）<')}</select></label>
+          <label class="f"><span>群の数</span><input type="number" id="tK" min="1" max="${rs.length}" value="${t.k}" ${t.manual ? 'disabled' : ''}></label>
+        </div>
+        <details style="margin-top:10px"><summary class="small" style="cursor:pointer;font-weight:700">区分の条件と書き出し</summary>
+          <div class="grid2" style="margin-top:8px">
+            <label class="f"><span>類似度</span><select id="tMethod"><option value="bray"${t.method === 'bray' ? ' selected' : ''}>Bray-Curtis（被度を考慮）</option><option value="jaccard"${t.method === 'jaccard' ? ' selected' : ''}>Jaccard（在・不在）</option></select></label>
+            <label class="f"><span>識別種の出現頻度（群内）</span><input type="number" id="tMinFreq" step="0.05" min="0.2" max="1" value="${t.minFreq}"></label>
+            <label class="f"><span>識別種のφ係数</span><input type="number" id="tMinPhi" step="0.05" min="0" max="1" value="${t.minPhi}"></label>
+          </div>
+          <div class="row" style="margin-top:10px">
+            <label class="btn sm ghost"><input type="checkbox" id="tMerge" ${t.merge ? 'checked' : ''}> 階層を統合して種単位で集計</label>
+            <label class="btn sm ghost"><input type="checkbox" id="tManual" ${t.manual ? 'checked' : ''}> 群を手動で指定</label>
+            <button class="btn sm" id="tCSV">表をCSVで書き出す</button>
+            <button class="btn sm" onclick="window.print()">印刷</button>
+          </div>
+        </details>
+        <div id="manualBox"></div>
+      </section>
+      <div id="tOut"></div>`;
+    const redraw = () => {
+      const res = computeTable();
+      drawManual(res);
+      const out = $('#tOut');
+      if (t.tab === 'raw') out.innerHTML = rawTableHTML(res);
+      else if (t.tab === 'synoptic') out.innerHTML = synopticHTML(res);
+      else if (t.tab === 'dendro') out.innerHTML = dendroHTML(res);
+      else out.innerHTML = sortedTableHTML(res);
+    };
+    const bind = (id, key, conv) => { $(id).onchange = e => { t[key] = conv(e.target); save(); if (key === 'manual') { $('#tK').disabled = t.manual; } redraw(); }; };
+    bind('#tTab', 'tab', el => el.value); bind('#tK', 'k', el => Math.max(1, Math.min(rs.length, parseInt(el.value, 10) || 1)));
+    bind('#tMethod', 'method', el => el.value); bind('#tMinFreq', 'minFreq', el => +el.value); bind('#tMinPhi', 'minPhi', el => +el.value);
+    bind('#tMerge', 'merge', el => el.checked); bind('#tManual', 'manual', el => el.checked);
+    $('#tCSV').onclick = () => { const res = lastTable; download(`vegetation_table_${t.tab}_${today()}.csv`, toCSV(tableRows(res, t.tab)), 'text/csv'); };
+    function drawManual(res) {
+      const box = $('#manualBox');
+      if (!t.manual) { box.innerHTML = ''; return; }
+      box.innerHTML = `<p class="small muted" style="margin-top:10px">各調査区の群名（A, B…など任意の文字）を入れてください。未入力があると自動区分に戻ります。</p>
+        <div class="row">${rs.map(r => `<label class="f" style="width:96px"><span>${esc(r.code)}</span><input type="text" data-g="${esc(r.id)}" value="${esc(r.group || '')}" maxlength="6"></label>`).join('')}</div>`;
+      box.onchange = e => { const r = findR(e.target.dataset.g); if (r) { r.group = e.target.value.trim(); save(); redraw(); } };
+    }
+    redraw();
+  }
+
+  const cellText = v => v ? `${v.cover}${v.soc ? '・' + v.soc : ''}` : '';
+  function spLabelHTML(k, merge) { const { sp, layer } = VEG.Analysis.labelOf(k); return `${esc(sp)}${!merge && layer ? `<span class="ly">${esc(layerName(layer))}</span>` : ''}`; }
+
+  function headerRows(res, order, withGroups) {
+    const rs = res.releves;
+    const gs = res.groups;
+    const gstart = j => withGroups && j > 0 && gs[order[j]] !== gs[order[j - 1]];
+    const nsp = r => new Set((r.records || []).map(x => x.sp)).size;
+    return `<thead>
+      ${withGroups ? `<tr><th class="sp">群</th>${order.map((i, j) => `<th class="${gstart(j) ? 'gstart' : ''}">${j === 0 || gstart(j) ? `<span class="gl" style="--gc:${gColor(gs[i])}">${VEG.Analysis.groupLabel(gs[i])}</span>` : ''}</th>`).join('')}</tr>` : ''}
+      <tr><th class="sp">調査区番号</th>${order.map((i, j) => `<th class="${gstart(j) ? 'gstart' : ''}">${esc(rs[i].code)}</th>`).join('')}</tr>
+      <tr><th class="sp">面積 m² ／ 種数</th>${order.map((i, j) => `<th class="${gstart(j) ? 'gstart' : ''}" style="font-weight:400">${esc(rs[i].area || '-')}／${nsp(rs[i])}</th>`).join('')}</tr>
+    </thead>`;
+  }
+  function rawTableHTML(res) {
+    const order = res.releves.map((_, i) => i);
+    const LO = { T1: 0, T2: 1, S: 2, H: 3, M: 4 };
+    const keys = res.mat.keys.slice().sort((a, b) => {
+      const la = VEG.Analysis.labelOf(a).layer, lb = VEG.Analysis.labelOf(b).layer;
+      return (LO[la] || 0) - (LO[lb] || 0) || res.diff.info.get(b).total - res.diff.info.get(a).total || a.localeCompare(b, 'ja');
+    });
+    return `<p class="small muted">入力順に並べた素表です。値は「被度・群度」。</p><div class="tablewrap"><table class="veg">${headerRows(res, order, false)}<tbody>
+      ${keys.map(k => `<tr><th class="sp">${spLabelHTML(k, S.settings.table.merge)}</th>${order.map(i => { const v = res.mat.rows.get(k)[i]; return `<td class="${v ? 'on' : ''}">${cellText(v)}</td>`; }).join('')}</tr>`).join('')}
+    </tbody></table></div>`;
+  }
+  function sortedTableHTML(res) {
+    const order = res.order, gs = res.groups;
+    const gstart = j => j > 0 && gs[order[j]] !== gs[order[j - 1]];
+    const merge = S.settings.table.merge;
+    const nDiff = res.blocks.filter(b => b.kind === 'diff').reduce((a, b) => a + b.keys.length, 0);
+    const body = res.blocks.filter(b => b.keys.length).map(b => `
+      <tr class="block"><th class="sp" colspan="1">${esc(b.title)}（${b.keys.length}）</th>${order.map((_, j) => `<td class="${gstart(j) ? 'gstart' : ''}"></td>`).join('')}</tr>
+      ${b.keys.map(k => `<tr><th class="sp">${spLabelHTML(k, merge)}</th>${order.map((i, j) => {
+        const v = res.mat.rows.get(k)[i];
+        const inBlk = b.kind === 'diff' && b.groups.includes(gs[i]);
+        return `<td class="${v ? 'on' : ''}${inBlk ? ' blk' : ''}${gstart(j) ? ' gstart' : ''}" ${inBlk ? `style="--gc:${gColor(gs[i])}"` : ''}>${cellText(v)}</td>`;
+      }).join('')}</tr>`).join('')}`).join('');
+    const sizes = res.diff.sizes.map((n, g) => `群${VEG.Analysis.groupLabel(g)}：${n}地点`).join('、');
+    return `<p class="small muted">${sizes}。識別種 ${nDiff}種。網掛けは識別種のまとまり（同居パターン）です。${nDiff === 0 ? '識別種が抽出されない場合は群の数を減らすか、閾値を下げてください。' : ''}</p>
+      <div class="tablewrap"><table class="veg">${headerRows(res, order, true)}<tbody>${body}</tbody></table></div>
+      ${groupIdHTML(res)}`;
+  }
+  /* 群ごとの合成調査区（出現頻度40%以上の種）で群集を判定 */
+  function groupSynthetic(res, g) {
+    const idx = res.releves.map((_, i) => i).filter(i => res.groups[i] === g);
+    const base = res.releves[idx[0]];
+    const recs = [];
+    res.mat.keys.forEach(k => {
+      const vals = idx.map(i => res.mat.rows.get(k)[i]).filter(Boolean);
+      if (vals.length / idx.length >= 0.4) {
+        vals.sort((a, b) => a.mid - b.mid);
+        const med = vals[Math.floor(vals.length / 2)];
+        const { sp, layer } = VEG.Analysis.labelOf(k);
+        recs.push({ sp, layer: layer || 'H', cover: med.cover, soc: med.soc });
+      }
+    });
+    return Object.assign({}, base, { records: recs });
+  }
+  function groupIdHTML(res) {
+    if (!res.diff.G) return '';
+    const rows = [];
+    for (let g = 0; g < res.diff.G; g++) {
+      const syn = groupSynthetic(res, g);
+      const id = VEG.Analysis.identify(syn, syntaxa(), S.settings);
+      const t = id.results[0];
+      const codes = res.releves.filter((_, i) => res.groups[i] === g).map(r => r.code).join(', ');
+      rows.push(`<div class="cand"><div class="spread"><span><span class="gl" style="--gc:${gColor(g)};color:#fff;background:var(--gc);border-radius:4px;padding:0 6px;font-weight:800">${VEG.Analysis.groupLabel(g)}</span> ${t ? '<b>' + esc(t.s.ja) + '</b> <span class="small muted">' + esc(t.s.la) + '</span>' : '<span class="muted">該当なし</span>'}</span>${t ? `<span>${Math.round(t.score * 100)}%</span>` : ''}</div>
+        <div class="small muted">${esc(codes)}${t && t.flags.length ? '／' + esc(t.flags.join('、')) : ''}</div></div>`);
+    }
+    return `<section class="panel" style="margin-top:14px"><h2>群ごとの群集判定</h2>${rows.join('')}<p class="small muted">群内で出現頻度40%以上の種を合成して参照DBと照合しています。</p></section>`;
+  }
+  function synopticHTML(res) {
+    const syn = VEG.Analysis.synoptic(res);
+    const G = res.diff.G, merge = S.settings.table.merge;
+    let lastBlock = null;
+    const body = syn.map(row => {
+      let head = '';
+      if (row.block !== lastBlock) { lastBlock = row.block; head = `<tr class="block"><th class="sp">${esc(row.block.title)}</th>${Array(G).fill('<td></td>').join('')}</tr>`; }
+      return head + `<tr><th class="sp">${spLabelHTML(row.key, merge)}</th>${row.cells.map((c, g) => {
+        const inBlk = row.block.kind === 'diff' && row.block.groups.includes(g);
+        return `<td class="${c.cls ? 'on' : ''}${inBlk ? ' blk' : ''}" ${inBlk ? `style="--gc:${gColor(g)}"` : ''}>${c.cls}${c.range ? '<sup>' + esc(c.range) + '</sup>' : ''}</td>`;
+      }).join('')}</tr>`;
+    }).join('');
+    return `<p class="small muted">常在度：I ≤20%、II ≤40%、III ≤60%、IV ≤80%、V &gt;80%。右肩は被度の範囲。</p>
+      <div class="tablewrap"><table class="veg"><thead><tr><th class="sp">群</th>${res.diff.sizes.map((n, g) => `<th><span class="gl" style="--gc:${gColor(g)}">${VEG.Analysis.groupLabel(g)}</span></th>`).join('')}</tr>
+      <tr><th class="sp">調査区数</th>${res.diff.sizes.map(n => `<th>${n}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table></div>`;
+  }
+  function dendroHTML(res) {
+    if (!res.tree) return '<p class="note">群を手動指定しているため樹形図はありません。</p>';
+    const order = []; (function w(n) { if (!n.left) order.push(n.id); else { w(n.left); w(n.right); } })(res.tree);
+    const rowH = 26, left = 90, W = 560, H = order.length * rowH + 30;
+    const maxH = res.tree.height || 1;
+    const xOf = h => left + (W - left - 20) * (h / maxH);
+    const yLeaf = {}; order.forEach((id, i) => { yLeaf[id] = 15 + i * rowH + rowH / 2; });
+    const lines = [];
+    (function draw(n) {
+      if (!n.left) return { x: xOf(0), y: yLeaf[n.id] };
+      const a = draw(n.left), b = draw(n.right), x = xOf(n.height);
+      lines.push(`<path d="M${a.x},${a.y}H${x}V${b.y}H${b.x}" fill="none" stroke="var(--ink)" stroke-width="1.5"/>`);
+      return { x, y: (a.y + b.y) / 2 };
+    })(res.tree);
+    const labels = order.map(id => `<text x="${left - 8}" y="${yLeaf[id] + 4}" text-anchor="end" font-size="13" font-weight="700" fill="${gColor(res.groups[id])}" style="fill:${gColor(res.groups[id])}">${esc(res.releves[id].code)}</text>`).join('');
+    const ticks = [0, 0.25, 0.5, 0.75, 1].map(f => `<text x="${xOf(maxH * f)}" y="${H - 4}" font-size="11" text-anchor="middle" fill="var(--muted)">${(maxH * f).toFixed(2)}</text>`).join('');
+    return `<p class="small muted">UPGMA法（${S.settings.table.method === 'jaccard' ? 'Jaccard距離' : 'Bray-Curtis距離、被度中央値の平方根'}）。右に行くほど非類似。色は区分された群です。</p>
+      <div class="tablewrap" style="padding:8px"><svg viewBox="0 0 ${W} ${H}" width="100%" style="min-width:340px" role="img" aria-label="調査区の樹形図">${lines.join('')}${labels}${ticks}</svg></div>`;
+  }
+  function tableRows(res, tab) {
+    const merge = S.settings.table.merge;
+    const nameOf = k => { const { sp, layer } = VEG.Analysis.labelOf(k); return [sp, merge ? '' : layerName(layer)]; };
+    if (tab === 'synoptic') {
+      const syn = VEG.Analysis.synoptic(res);
+      return [['区分', '種名', '階層'].concat(res.diff.sizes.map((n, g) => '群' + VEG.Analysis.groupLabel(g) + '(n=' + n + ')'))]
+        .concat(syn.map(row => [row.block.title].concat(nameOf(row.key), row.cells.map(c => c.cls + (c.range ? ' ' + c.range : '')))));
+    }
+    const order = tab === 'raw' ? res.releves.map((_, i) => i) : res.order;
+    const head = [['区分', '種名', '階層'].concat(order.map(i => res.releves[i].code))];
+    if (tab !== 'raw') head.push(['群', '', ''].concat(order.map(i => VEG.Analysis.groupLabel(res.groups[i]))));
+    head.push(['面積(m2)', '', ''].concat(order.map(i => res.releves[i].area)));
+    const blocks = tab === 'raw' ? [{ title: '', keys: res.mat.keys }] : res.blocks;
+    blocks.forEach(b => b.keys.forEach(k => head.push([b.title].concat(nameOf(k), order.map(i => cellText(res.mat.rows.get(k)[i]))))));
+    return head;
+  }
+
+  /* =========================================================
+     判定・遷移
+     ========================================================= */
+  const anaState = { scenario: 'none', years: 30 };
+  function renderAnalysis(id) {
+    const rs = S.releves;
+    if (!rs.length) { view.innerHTML = `<h1>判定・遷移</h1><div class="empty panel"><p>調査区を記録すると、群集の判定と遷移の予測ができます。</p><a class="btn primary" href="#list">調査区へ</a></div>${regionBrowserHTML()}`; bindRegionBrowser(); return; }
+    const r = findR(id) || rs[0];
+    view.innerHTML = `
+      <h1>判定・遷移</h1>
+      <p class="lead">都道府県・標高から植生帯と地方を決め、その範囲の群集を参照DBと照合します。遷移は植生帯ごとの標準的な年数をもとに、立地と下層の後継樹から速さを補正します。</p>
+      <label class="f" style="max-width:420px;margin-bottom:12px"><span>調査区</span><select id="aSel">${rs.map(x => `<option value="${esc(x.id)}"${x === r ? ' selected' : ''}>${esc(x.code)}　${esc(x.site || '')}</option>`).join('')}</select></label>
+      <div class="twocol"><div>
+        <section class="panel" id="ctxPanel"></section>
+        <section class="panel"><h2>群集の判定</h2><div id="idBox"></div></section>
+      </div><div>
+        <section class="panel"><h2>遷移の予測</h2>
+          <div class="grid2">
+            <label class="f"><span>管理シナリオ</span><select id="scen">${Object.entries(VEG.Succession.SCENARIOS).map(([k, v]) => `<option value="${k}"${k === anaState.scenario ? ' selected' : ''}>${esc(v.name)}</option>`).join('')}</select></label>
+            <label class="f"><span>経過年数：<b id="yv">${anaState.years}</b>年後</span><input type="range" id="yrs" min="0" max="200" step="5" value="${anaState.years}"></label>
+          </div>
+          <div id="sucBox"></div>
+        </section>
+      </div></div>
+      ${regionBrowserHTML(r)}`;
+    $('#aSel').onchange = e => { location.hash = '#analysis/' + encodeURIComponent(e.target.value); };
+    $('#scen').onchange = e => { anaState.scenario = e.target.value; drawSuc(); };
+    $('#yrs').oninput = e => { anaState.years = +e.target.value; $('#yv').textContent = anaState.years; drawSuc(true); };
+    let idRes = null, pred = null;
+    function drawCtx() {
+      const ctx = VEG.Analysis.contextOf(r, S.settings);
+      $('#ctxPanel').innerHTML = `<h2>立地と植生帯</h2>
+        <dl class="kv"><dt>地点</dt><dd>${esc(r.pref || '未設定')}　${esc(r.site || '')}</dd><dt>標高・傾斜</dt><dd>${esc(r.elev || '-')} m、${esc(r.slope || '-')}°、${esc(r.aspect || '-')}</dd>
+        <dt>微地形・土壌</dt><dd>${esc(r.topo || '-')}、${esc(r.soil || '-')}、${esc(r.moist || '-')}</dd><dt>人為的影響</dt><dd>${esc(r.impact || '-')}${r.yearsSince ? '（' + esc(r.yearsSince) + '年経過）' : ''}</dd></dl>
+        <div class="grid2" style="margin-top:10px">
+          <label class="f"><span>植生帯（推定：${ctx.zone ? esc(VEG.ZONES[ctx.zone].short) : '不明'}）</span><select id="zOv"><option value="">推定値を使う</option>${Object.entries(VEG.ZONES).map(([k, v]) => `<option value="${k}"${r.zoneOverride === k ? ' selected' : ''}>${esc(v.name)}</option>`).join('')}</select></label>
+          <label class="f"><span>気候区分</span><select id="sOv"><option value="">推定値（${ctx.pref ? (ctx.pref.sea === 'J' ? '日本海側' : '太平洋側') : '-'}）</option><option value="J"${r.seaOverride === 'J' ? ' selected' : ''}>日本海側（多雪）</option><option value="P"${r.seaOverride === 'P' ? ' selected' : ''}>太平洋側（少雪）</option></select></label>
+        </div>
+        ${!r.pref ? '<p class="note">都道府県が未設定のため、地域による絞り込みが効いていません。</p>' : ''}`;
+      $('#zOv').onchange = e => { r.zoneOverride = e.target.value; save(); drawAll(); };
+      $('#sOv').onchange = e => { r.seaOverride = e.target.value; save(); drawAll(); };
+    }
+    function drawId() {
+      idRes = VEG.Analysis.identify(r, syntaxa(), S.settings);
+      if (!idRes.results.length) { $('#idBox').innerHTML = '<p class="muted">参照DBの群集と共通する種がありません。種名の表記（カタカナ和名）を確認してください。</p>'; return; }
+      $('#idBox').innerHTML = idRes.results.map((x, i) => `<div class="cand${i === 0 ? ' top' : ''}">
+        <div class="spread"><span><b>${esc(x.s.ja)}</b> <span class="badge">${esc(VEG.STAGES[x.s.stage].short)}</span>${x.flags.map(f => `<span class="flag">${esc(f)}</span>`).join('')}</span><b>${Math.round(x.score * 100)}%</b></div>
+        <div class="small muted"><i>${esc(x.s.la)}</i>　${esc(x.s.cls)}</div>
+        <div class="bar"><i style="width:${Math.round(x.score * 100)}%"></i></div>
+        <div class="chips">${x.s.char.map(n => `<span class="chip ${x.hitChar.includes(n) ? 'hit' : 'miss'}" title="標徴種・優占種">${esc(n)}</span>`).join('')}${x.hitDiff.map(n => `<span class="chip char" title="識別種">${esc(n)}</span>`).join('')}</div>
+        <p class="small" style="margin-top:6px">${esc(x.s.note)}</p></div>`).join('') +
+        `<p class="small muted">組成の一致度 × 地理的整合（植生帯・地方・日本海側／太平洋側）で順位付けしています。塗りつぶしは確認済み、取り消し線は未確認の標徴種です。参照DBは代表種による簡易版のため、確定には地域の植生誌・原記載と照合してください。</p>`;
+    }
+    function drawSuc(onlyYear) {
+      if (!onlyYear || !pred) pred = VEG.Succession.predict(r, idRes, syntaxa(), S.settings, anaState.scenario);
+      const at = pred.at(anaState.years);
+      const rng = (at.early.name !== at.late.name) ? `<p class="small">幅：早ければ「${esc(at.early.name)}」、遅ければ「${esc(at.late.name)}」</p>` : '';
+      $('#sucBox').innerHTML = `
+        <p style="margin-top:10px">現在：<b>${esc(VEG.STAGES[pred.stage].name)}</b>${pred.current ? '（' + esc(pred.current.ja) + '）' : ''}<br><span class="small muted">${esc(VEG.ZONES[pred.ctx.zone].name)}${pred.series !== 'zonal' ? '、' + (pred.series === 'wetland' ? '湿地系列' : '海岸系列') : ''}</span></p>
+        <p class="yearout">${anaState.years}年後：${esc(at.typical.name)}</p>${rng}
+        <div class="timeline">${timelineSVG(pred, anaState.years)}</div>
+        ${pred.notes.map(n => `<p class="note">${esc(n)}</p>`).join('')}
+        ${pred.climaxRank.length ? `<h3>到達しうる極相（潜在自然植生）の候補</h3>${pred.climaxRank.map((c, i) => `<div class="cand"><b>${i + 1}. ${esc(c.s.ja)}</b><div class="small muted">${esc(c.why.join('／') || '植生帯・地方から')}</div></div>`).join('')}` : ''}
+        <p class="small muted">年数は日本の二次遷移に関する一般的な知見にもとづく目安で、種子供給源・シカ密度・気象害などで大きく変わります。</p>`;
+    }
+    function drawAll() { drawCtx(); drawId(); drawSuc(); }
+    drawAll();
+    bindRegionBrowser();
+  }
+
+  function timelineSVG(pred, year) {
+    const path = pred.path;
+    const lastStart = path.length ? path[path.length - 1].start[2] : 0;
+    const maxY = Math.min(400, Math.max(60, Math.ceil((lastStart * 1.15 + 10) / 10) * 10, year + 10));
+    const L = 168, W = 520, R = 14, rowH = 36, top = 10, H = top + path.length * rowH + 34;
+    const x = y => L + (W - L - R) * Math.min(1, y / maxY);
+    const rows = path.map((p, i) => {
+      const y0 = top + i * rowH;
+      const next = path[i + 1];
+      const e = next ? next.start[1] : maxY;
+      const cur = year >= p.start[1] && year < e;
+      const name = p.name.length > 11 ? p.name.slice(0, 10) + '…' : p.name;
+      return `<g><text x="${L - 8}" y="${y0 + 21}" text-anchor="end" font-size="14" font-weight="${cur ? 800 : 500}"><title>${esc(p.name)}</title>${esc(name)}</text>
+        <line x1="${x(p.start[0])}" x2="${x(p.start[2])}" y1="${y0 + 17}" y2="${y0 + 17}" stroke="var(--muted)" stroke-width="2" stroke-dasharray="3 3"/>
+        <rect x="${x(p.start[1])}" y="${y0 + 8}" width="${Math.max(3, x(e) - x(p.start[1]))}" height="18" rx="3" fill="${cur ? 'var(--tape)' : 'var(--forest)'}" opacity="${cur ? 1 : 0.75}"/></g>`;
+    }).join('');
+    const ticks = []; const step = maxY > 200 ? 50 : maxY > 100 ? 25 : 10;
+    for (let t = 0; t <= maxY; t += step) ticks.push(`<line x1="${x(t)}" x2="${x(t)}" y1="${top}" y2="${H - 26}" stroke="var(--line)"/><text x="${x(t)}" y="${H - 10}" font-size="13" text-anchor="middle" fill="var(--muted)" style="fill:var(--muted)">${t}</text>`);
+    return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="遷移の時間軸">${ticks.join('')}${rows}
+      <line x1="${x(year)}" x2="${x(year)}" y1="${top - 4}" y2="${H - 24}" stroke="var(--tape)" stroke-width="2.5"/>
+      <text x="${W - R}" y="${H - 10}" font-size="11" text-anchor="end" fill="var(--muted)" style="fill:var(--muted)">年</text></svg>
+      <p class="small muted">帯は標準的な到達時期、点線は早い〜遅い場合の開始時期の幅。</p>`;
+  }
+
+  function regionBrowserHTML(r) {
+    return `<details class="panel"><summary>地域ごとの群集一覧（調査前の下調べ）</summary>
+      <div class="grid2" style="margin-top:10px">
+        <label class="f"><span>都道府県</span><select id="rbPref">${opts(VEG.PREFS.map(p => p.name), (r && r.pref) || '東京都')}</select></label>
+        <label class="f"><span>標高 (m)</span><input type="number" id="rbElev" value="${esc((r && r.elev) || 100)}"></label>
+      </div><div id="rbOut"></div></details>`;
+  }
+  function bindRegionBrowser() {
+    const draw = () => {
+      const pref = $('#rbPref').value, elev = $('#rbElev').value;
+      const z = VEG.zoneOf(pref, elev, S.settings.prefOverrides);
+      const list = VEG.Analysis.candidatesFor(pref, elev, syntaxa(), S.settings);
+      $('#rbOut').innerHTML = `<p class="small" style="margin-top:8px">${esc(VEG.ZONES[z].name)}</p>` + list.map(({ s, seaMatch }) => `<div class="cand"><b>${esc(s.ja)}</b> <span class="badge">${esc(VEG.STAGES[s.stage].short)}</span>${seaMatch ? '' : '<span class="flag">' + (s.sea === 'J' ? '日本海側型' : '太平洋側型') + '</span>'}
+        <div class="small muted"><i>${esc(s.la)}</i></div><div class="small">標徴種・優占種：${esc(s.char.join('、'))}／識別種：${esc(s.diff.join('、') || '-')}</div></div>`).join('');
+    };
+    if (!$('#rbPref')) return;
+    $('#rbPref').onchange = draw; $('#rbElev').oninput = draw; draw();
+  }
+
+  /* =========================================================
+     植生図
+     ========================================================= */
+  let mapObj = null;
+  const mapState = { color: 'community', drawing: false, pts: [], temp: null };
+  const PALETTE = ['#2E6F9E', '#C0582B', '#4E8A3A', '#8A4FA0', '#B08A1E', '#2C8C8C', '#A33A4E', '#5A5F6B', '#6B8E23', '#D2691E', '#1E6B52', '#7A4E2D'];
+  // 群落名 → 色：現在の調査区と区画に出てくる群落名を五十音順に並べ、順に色を割り当てる（同じデータなら毎回同じ色）
+  let colorReg = null;
+  function buildColorReg() {
+    const names = new Set(S.features.map(f => f.properties.community));
+    S.releves.forEach(r => { const c = topCommunity(r); if (c) names.add(c.name); });
+    colorReg = new Map(Array.from(names).sort((a, b) => a.localeCompare(b, 'ja')).map((n, i) => [n, PALETTE[i % PALETTE.length]]));
+  }
+  function colorForName(name) {
+    if (!colorReg) buildColorReg();
+    if (!colorReg.has(name)) colorReg.set(name, PALETTE[colorReg.size % PALETTE.length]);
+    return colorReg.get(name);
+  }
+
+  function pointLabel(r) {
+    if (mapState.color === 'group' && lastTable) {
+      const i = lastTable.releves.indexOf(r);
+      if (i >= 0) { const g = lastTable.groups[i]; return { label: '群' + VEG.Analysis.groupLabel(g), color: getComputedStyle(document.documentElement).getPropertyValue(GROUP_COLORS[g % 8]).trim() || PALETTE[g] }; }
+      return { label: '解析対象外', color: '#888' };
+    }
+    const c = topCommunity(r); const n = c ? c.name : '判定なし';
+    return { label: n, color: c ? colorForName(n) : '#888' };
+  }
+
+  function renderMap() {
+    if (mapObj) { mapObj.off(); mapObj.remove(); mapObj = null; }
+    mapState.temp = null; colorReg = null;
+    const pts = S.releves.filter(r => r.lat !== '' && r.lng !== '' && !isNaN(+r.lat) && !isNaN(+r.lng));
+    if (mapState.color === 'group' && !lastTable && included().length >= 2) computeTable();
+    view.innerHTML = `
+      <h1>植生図</h1>
+      <p class="lead">調査区を判定結果で色分けし、同じ群落と判断できる範囲を区画として描いて現存植生図を作ります。背景地図は国土地理院タイル（表示した範囲は端末に保存され、圏外でも再表示できます）。</p>
+      <section class="panel noprint">
+        <div class="row">
+          <label class="f" style="min-width:220px"><span>調査区の色分け</span><select id="mColor"><option value="community"${mapState.color === 'community' ? ' selected' : ''}>判定された群集</option><option value="group"${mapState.color === 'group' ? ' selected' : ''}>植生表の群</option></select></label>
+          <button class="btn sm primary" id="mDraw">${mapState.drawing ? '描画を終える' : '植生区画を描く'}</button>
+          <button class="btn sm" id="mGeo">GeoJSONを書き出す</button>
+          <label class="btn sm"><input type="file" id="mImp" accept=".geojson,.json" hidden>GeoJSONを読み込む</label>
+        </div>
+        <div id="drawBox"></div>
+      </section>
+      <div id="map" role="region" aria-label="地図"></div>
+      <div class="legend" id="legend"></div>
+      <section class="panel" style="margin-top:14px"><h2>植生区画 <span class="small muted">${S.features.length}区画</span></h2><div id="fList"></div></section>`;
+    $('#mColor').onchange = e => { mapState.color = e.target.value; renderMap(); };
+    $('#mGeo').onclick = exportGeoJSON;
+    $('#mImp').onchange = importGeoJSON;
+    $('#mDraw').onclick = () => { mapState.drawing = !mapState.drawing; mapState.pts = []; renderMap(); };
+    drawFeatureList();
+
+    if (!window.L) {
+      $('#mDraw').disabled = true; $('#mDraw').title = '地図ライブラリの取得後に使えます';
+      if (document.readyState !== 'complete') { window.addEventListener('load', () => { if ((location.hash || '').startsWith('#map')) renderMap(); }, { once: true }); }
+      fallbackMap(pts);
+      return;
+    }
+    const L = window.L;
+    mapObj = L.map('map', { zoomControl: true, doubleClickZoom: !mapState.drawing });
+    const gsi = (id, ext, name) => L.tileLayer(`https://cyberjapandata.gsi.go.jp/xyz/${id}/{z}/{x}/{y}.${ext}`, { attribution: '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">地理院タイル</a>', maxZoom: 18, crossOrigin: true });
+    const base = { '標準地図': gsi('std', 'png'), '淡色地図': gsi('pale', 'png'), '写真': gsi('seamlessphoto', 'jpg'),
+      'OpenStreetMap': L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap contributors', maxZoom: 19 }) };
+    base['淡色地図'].addTo(mapObj);
+    L.control.layers(base, null, { collapsed: true }).addTo(mapObj);
+    L.control.scale({ imperial: false }).addTo(mapObj);
+
+    // 先に表示範囲を決めてから図形を追加する（Leafletの初期化順序の制約）
+    const ll = pts.map(r => [+r.lat, +r.lng]);
+    S.features.forEach(f => ((f.geometry && f.geometry.coordinates && f.geometry.coordinates[0]) || []).forEach(c => ll.push([c[1], c[0]])));
+    if (ll.length) mapObj.fitBounds(L.latLngBounds(ll).pad(0.3), { maxZoom: 16, animate: false });
+    else mapObj.setView([36.2, 138.3], 5);
+    const legend = new Map();
+    S.features.forEach((f, i) => {
+      const col = colorForName(f.properties.community);
+      legend.set(f.properties.community, col);
+      L.geoJSON(f, { interactive: !mapState.drawing, style: { color: col, weight: 2, fillColor: col, fillOpacity: 0.35 } })
+        .bindPopup(`<b>${esc(f.properties.community)}</b><br>${esc(f.properties.note || '')}`).addTo(mapObj);
+    });
+    const markers = [];
+    pts.forEach(r => {
+      const p = pointLabel(r); legend.set(p.label, p.color);
+      const m = L.circleMarker([+r.lat, +r.lng], { radius: 9, color: '#fff', weight: 2, fillColor: p.color, fillOpacity: 1, interactive: !mapState.drawing })
+        .bindPopup(`<b>${esc(r.code)}</b> ${esc(r.site || '')}<br>${esc(p.label)}<br><a href="#edit/${encodeURIComponent(r.id)}">記録を開く</a>`)
+        .bindTooltip(esc(r.code), { permanent: true, direction: 'right', offset: [8, 0], className: '' });
+      m.addTo(mapObj); markers.push(m);
+    });
+    $('#legend').innerHTML = Array.from(legend.entries()).map(([k, c]) => `<span><i style="background:${c}"></i>${esc(k)}</span>`).join('');
+
+    if (mapState.drawing) setupDrawing(L);
+  }
+
+  function setupDrawing(L) {
+    const box = $('#drawBox');
+    const comms = Array.from(new Set(S.releves.map(r => (topCommunity(r) || {}).name).filter(Boolean).concat(syntaxa().map(s => s.ja))));
+    box.innerHTML = `<p class="small" style="margin-top:10px">地図をタップして頂点を置き、3点以上で「区画を保存」。</p>
+      <div class="grid2"><label class="f"><span>群落名</span><input type="text" id="dName" list="commList" placeholder="例：ヤブコウジ－スダジイ群集"></label>
+      <label class="f"><span>メモ</span><input type="text" id="dNote" placeholder="判読根拠など"></label></div>
+      <datalist id="commList">${comms.map(c => `<option value="${esc(c)}">`).join('')}</datalist>
+      <div class="row" style="margin-top:8px"><button class="btn sm tape" id="dSave">区画を保存</button><button class="btn sm" id="dUndo">1点戻す</button><span class="small muted" id="dCount">0点</span></div>`;
+    const redraw = () => {
+      if (mapState.temp) mapState.temp.remove();
+      mapState.temp = L.polygon(mapState.pts, { color: '#D92E63', weight: 2, dashArray: '5 4', fillOpacity: 0.15, interactive: false }).addTo(mapObj);
+      $('#dCount').textContent = mapState.pts.length + '点';
+    };
+    mapObj.on('click', e => { mapState.pts.push([e.latlng.lat, e.latlng.lng]); redraw(); });
+    $('#dUndo').onclick = () => { mapState.pts.pop(); redraw(); };
+    $('#dSave').onclick = () => {
+      const name = $('#dName').value.trim();
+      if (mapState.pts.length < 3) { toast('3点以上を置いてください'); return; }
+      if (!name) { toast('群落名を入れてください'); $('#dName').focus(); return; }
+      const ring = mapState.pts.map(p => [+p[1].toFixed(6), +p[0].toFixed(6)]); ring.push(ring[0]);
+      S.features.push({ type: 'Feature', properties: { community: name, note: $('#dNote').value.trim(), color: colorForName(name), created: today() }, geometry: { type: 'Polygon', coordinates: [ring] } });
+      save(true); mapState.pts = []; toast('区画を保存しました'); renderMap();
+    };
+  }
+  function drawFeatureList() {
+    $('#fList').innerHTML = S.features.length ? `<table class="plain"><thead><tr><th>群落</th><th>面積（概算）</th><th></th></tr></thead><tbody>${S.features.map((f, i) =>
+      `<tr><td><i style="display:inline-block;width:12px;height:12px;border-radius:2px;background:${colorForName(f.properties.community)}"></i> ${esc(f.properties.community)}</td><td>${polyArea(f).toFixed(2)} ha</td><td><button class="btn sm danger" data-fdel="${i}">削除</button></td></tr>`).join('')}</tbody></table>`
+      : '<p class="muted small">まだ区画はありません。「植生区画を描く」で、同じ群落が広がる範囲を地図上に描けます。</p>';
+    $('#fList').onclick = e => { const b = e.target.closest('[data-fdel]'); if (!b) return; if (!confirm('この区画を削除しますか？')) return; S.features.splice(+b.dataset.fdel, 1); save(true); renderMap(); };
+  }
+  function polyArea(f) {
+    const ring = f.geometry && f.geometry.coordinates && f.geometry.coordinates[0]; if (!ring) return 0;
+    const R = 6378137, rad = Math.PI / 180; let s = 0;
+    for (let i = 0; i < ring.length - 1; i++) { const [x1, y1] = ring[i], [x2, y2] = ring[i + 1]; s += (x2 - x1) * rad * (2 + Math.sin(y1 * rad) + Math.sin(y2 * rad)); }
+    return Math.abs(s * R * R / 2) / 10000;
+  }
+  function fallbackMap(pts) {
+    const el = $('#map');
+    if (!pts.length) { el.innerHTML = '<div class="empty">地図ライブラリを読み込めていません（初回はオンラインで開く必要があります）。緯度・経度のある調査区もまだありません。</div>'; return; }
+    const lats = pts.map(r => +r.lat), lngs = pts.map(r => +r.lng);
+    const [a, b, c, d] = [Math.min(...lats), Math.max(...lats), Math.min(...lngs), Math.max(...lngs)];
+    const pad = 0.1, W = 600, H = 420;
+    const sx = v => 30 + (W - 60) * ((v - c) / ((d - c) || 1e-4));
+    const sy = v => H - 30 - (H - 60) * ((v - a) / ((b - a) || 1e-4));
+    const leg = new Map();
+    const dots = pts.map(r => { const p = pointLabel(r); leg.set(p.label, p.color); return `<circle cx="${sx(+r.lng)}" cy="${sy(+r.lat)}" r="8" fill="${p.color}" stroke="#fff" stroke-width="2"/><text x="${sx(+r.lng) + 11}" y="${sy(+r.lat) + 4}" font-size="12" style="fill:var(--ink)">${esc(r.code)}</text>`; }).join('');
+    el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="100%" height="100%">${dots}</svg>`;
+    $('#legend').innerHTML = '<span class="muted">背景地図なし（地図ライブラリ未取得）。位置関係のみ表示しています。</span>' + Array.from(leg.entries()).map(([k, c]) => `<span><i style="background:${c}"></i>${esc(k)}</span>`).join('');
+    void pad;
+  }
+  function exportGeoJSON() {
+    const feats = S.releves.filter(r => r.lat !== '' && r.lng !== '').map(r => {
+      const c = topCommunity(r);
+      const gi = lastTable ? lastTable.releves.indexOf(r) : -1;
+      return { type: 'Feature', geometry: { type: 'Point', coordinates: [+r.lng, +r.lat] },
+        properties: { kind: 'releve', code: r.code, site: r.site, date: r.date, pref: r.pref, elev: r.elev, area_m2: r.area, community: c ? c.name : '', score: c ? +c.score.toFixed(3) : null, group: gi >= 0 ? VEG.Analysis.groupLabel(lastTable.groups[gi]) : '', n_species: new Set((r.records || []).map(x => x.sp)).size } };
+    });
+    const polys = S.features.map(f => Object.assign({}, f, { properties: Object.assign({ kind: 'vegetation_unit' }, f.properties) }));
+    download(`vegetation_map_${today()}.geojson`, JSON.stringify({ type: 'FeatureCollection', features: feats.concat(polys) }, null, 1), 'application/geo+json');
+  }
+  function importGeoJSON(e) {
+    const file = e.target.files[0]; if (!file) return;
+    file.text().then(t => {
+      const j = JSON.parse(t); let n = 0;
+      (j.features || []).forEach(f => { if (f.geometry && f.geometry.type === 'Polygon') { f.properties = f.properties || {}; f.properties.community = f.properties.community || f.properties.name || '名称なし'; S.features.push(f); n++; } });
+      save(true); toast(`${n}区画を読み込みました`); renderMap();
+    }).catch(() => toast('GeoJSONを読み込めませんでした。ファイル形式を確認してください。'));
+  }
+
+  /* =========================================================
+     設定
+     ========================================================= */
+  function renderSettings() {
+    const st = S.settings;
+    let bytes = 0; try { bytes = (localStorage.getItem(KEY) || '').length * 2; } catch (e) { /* noop */ }
+    view.innerHTML = `
+      <h1>設定</h1>
+      <section class="panel"><h2>記録</h2><div class="grid2">
+        <label class="f"><span>被度の階級</span><select id="sScale">${Object.entries(VEG.COVER_SCALES).map(([k, v]) => `<option value="${k}"${st.scale === k ? ' selected' : ''}>${esc(v.name)}</option>`).join('')}</select></label>
+        <label class="f"><span>既定の調査者名</span><input type="text" id="sObs" value="${esc(st.observer)}"></label>
+        <label class="f"><span>表示</span><select id="sTheme">${[['auto', '端末の設定に合わせる'], ['light', 'ライト'], ['dark', 'ダーク'], ['field', '屋外モード（高コントラスト・大きな文字）']].map(([k, v]) => `<option value="${k}"${st.theme === k ? ' selected' : ''}>${v}</option>`).join('')}</select></label>
+      </div></section>
+
+      <section class="panel"><h2>植生帯の境界標高</h2>
+        <p class="small muted">都道府県ごとの目安値です。地域の文献や暖かさの指数にもとづいて調整できます。</p>
+        <div class="grid2"><label class="f"><span>都道府県</span><select id="zPref">${opts(VEG.PREFS.map(p => p.name), '東京都')}</select></label></div>
+        <div id="zEdit"></div>
+      </section>
+
+      <section class="panel"><h2>群集参照DB</h2>
+        <p class="small">内蔵 ${VEG.SYNTAXA.length}群集 ＋ 追加 ${st.customSyntaxa.length}群集${st.replaceDB && st.customSyntaxa.length ? '（追加分のみ使用中）' : ''}。地域の植生誌にもとづく群集を同じ形式のJSONで読み込めます。</p>
+        <div class="row">
+          <button class="btn sm" id="dbOut">現在のDBをJSONで書き出す（雛形）</button>
+          <label class="btn sm"><input type="file" id="dbIn" accept=".json" hidden>JSONを追加読み込み</label>
+          <label class="btn sm ghost"><input type="checkbox" id="dbRep" ${st.replaceDB ? 'checked' : ''}> 内蔵DBを使わず追加分だけ使う</label>
+          <button class="btn sm danger" id="dbClr">追加分を消去</button>
+        </div>
+      </section>
+
+      <section class="panel"><h2>データの保存と移行</h2>
+        <p class="small">データはこの端末のブラウザ内に保存されています（約 ${(bytes / 1024).toFixed(0)} KB）。ブラウザのデータ消去で失われるため、調査後はバックアップを書き出してください。</p>
+        <div class="row">
+          <button class="btn sm primary" id="bkOut">バックアップを書き出す（JSON）</button>
+          <label class="btn sm"><input type="file" id="bkIn" accept=".json" hidden>バックアップから復元</label>
+          <button class="btn sm" id="csvOut">全記録をCSVで書き出す</button>
+          <button class="btn sm danger" id="wipe">すべてのデータを消去</button>
+        </div>
+      </section>
+
+      <section class="panel"><h2>このアプリについて</h2>
+        <p class="small">植生野帳 ${VERSION}。Braun-Blanquet法（植物社会学的手法）による植生調査の記録・植生表作成・群落区分・遷移予測・植生図作成を、通信のない現場でも行うためのアプリです。</p>
+        <p class="small">群集参照DBと遷移年数は代表的な知見をまとめた簡易版です。報告書などで群集名を確定する際は、各地域の植生誌・原記載・環境省自然環境保全基礎調査の凡例と照合してください。</p>
+        <p class="small muted">標高・都道府県の取得と背景地図には国土地理院のサービスを利用しています。</p>
+      </section>`;
+    $('#sScale').onchange = e => { st.scale = e.target.value; save(); toast('被度の階級を変更しました'); };
+    $('#sObs').oninput = e => { st.observer = e.target.value; save(); };
+    $('#sTheme').onchange = e => { st.theme = e.target.value; save(); applyTheme(); };
+    const zEdit = () => {
+      const name = $('#zPref').value, p = VEG.PREFS.find(x => x.name === name), o = st.prefOverrides[name] || {};
+      const v = k => o[k] != null ? o[k] : p[k];
+      $('#zEdit').innerHTML = `<table class="plain" style="margin-top:8px"><tbody>
+        <tr><td>常緑広葉樹林域の上限</td><td><input type="number" data-zk="ev" value="${v('ev')}"> m</td></tr>
+        <tr><td>落葉広葉樹林域の上限</td><td><input type="number" data-zk="cd" value="${v('cd')}"> m</td></tr>
+        <tr><td>森林限界</td><td><input type="number" data-zk="sa" value="${v('sa')}"> m</td></tr>
+        <tr><td>気候区分</td><td><select data-zk="sea">${[['J', '日本海側'], ['P', '太平洋側']].map(([k, n]) => `<option value="${k}"${v('sea') === k ? ' selected' : ''}>${n}</option>`).join('')}</select></td></tr></tbody></table>
+        <button class="btn sm" id="zReset" style="margin-top:8px">${esc(name)}を既定値に戻す</button>`;
+      $('#zEdit').onchange = e => { const k = e.target.dataset.zk; if (!k) return; st.prefOverrides[name] = Object.assign({}, st.prefOverrides[name], { [k]: k === 'sea' ? e.target.value : +e.target.value }); save(); toast('境界を更新しました'); };
+      $('#zReset').onclick = () => { delete st.prefOverrides[name]; save(); zEdit(); };
+    };
+    $('#zPref').onchange = zEdit; zEdit();
+    $('#dbOut').onclick = () => download('syntaxa_db.json', JSON.stringify({ format: 'vegsurvey-syntaxa-1', syntaxa: syntaxa() }, null, 1), 'application/json');
+    $('#dbIn').onchange = e => {
+      const file = e.target.files[0]; if (!file) return;
+      file.text().then(t => {
+        const j = JSON.parse(t); const arr = Array.isArray(j) ? j : j.syntaxa;
+        if (!Array.isArray(arr)) throw new Error('syntaxa配列がありません');
+        const ok = arr.filter(s => s && s.ja && Array.isArray(s.char)).map(s => Object.assign({ id: 'c-' + s.ja, la: '', cls: '', type: 'climax', stage: 7, zones: ['WE'], regions: [], sea: '', diff: [], comp: [], note: '' }, s));
+        const ids = new Set(ok.map(s => s.id));
+        st.customSyntaxa = st.customSyntaxa.filter(s => !ids.has(s.id)).concat(ok.filter(s => !VEG.SYNTAXA.some(b => b.id === s.id && JSON.stringify(b) === JSON.stringify(s))));
+        save(true); refreshSpeciesList(); toast(`${ok.length}群集を読み込みました`); renderSettings();
+      }).catch(err => toast('読み込めませんでした：' + err.message));
+    };
+    $('#dbRep').onchange = e => { st.replaceDB = e.target.checked; save(); toast(st.replaceDB ? '追加分のDBだけを使います' : '内蔵DBと追加分を併用します'); };
+    $('#dbClr').onclick = () => { if (confirm('追加した群集データを消去しますか？')) { st.customSyntaxa = []; st.replaceDB = false; save(true); renderSettings(); } };
+    $('#bkOut').onclick = () => download(`vegsurvey_backup_${today()}.json`, JSON.stringify({ format: 'vegsurvey-backup-1', version: VERSION, exported: new Date().toISOString(), data: S }, null, 1), 'application/json');
+    $('#bkIn').onchange = e => {
+      const file = e.target.files[0]; if (!file) return;
+      file.text().then(t => {
+        const j = JSON.parse(t); const d = j.data || j;
+        if (!Array.isArray(d.releves)) throw new Error('調査区データがありません');
+        const replace = confirm('現在のデータを置き換えますか？\n［OK］置き換える　［キャンセル］追加する');
+        if (replace) { S = Object.assign(defaults(), d); S.settings = Object.assign(defaults().settings, d.settings || {}); }
+        else {
+          const ids = new Set(S.releves.map(r => r.id));
+          d.releves.forEach(r => { if (ids.has(r.id)) r.id = r.id + '-' + Date.now().toString(36); S.releves.push(r); });
+          S.features = S.features.concat(d.features || []);
+        }
+        save(true); applyTheme(); refreshSpeciesList(); toast(`${d.releves.length}地点を読み込みました`); renderSettings();
+      }).catch(err => toast('復元できませんでした：' + err.message));
+    };
+    $('#csvOut').onclick = () => {
+      const head = ['調査区', '調査日', '調査者', '都道府県', '地点名', '緯度', '経度', '標高', '傾斜', '方位', '微地形', '土壌', '湿り', '人為的影響', '経過年数', '面積m2', '階層', '種名', '被度', '群度'];
+      const rows = [head];
+      S.releves.forEach(r => (r.records || []).forEach(x => rows.push([r.code, r.date, r.observer, r.pref, r.site, r.lat, r.lng, r.elev, r.slope, r.aspect, r.topo, r.soil, r.moist, r.impact, r.yearsSince, r.area, layerName(x.layer), x.sp, x.cover, x.soc])));
+      download(`releves_long_${today()}.csv`, toCSV(rows), 'text/csv');
+    };
+    $('#wipe').onclick = () => {
+      if (!confirm('すべての調査区・植生区画・設定を消去します。先にバックアップを書き出しましたか？')) return;
+      S = defaults(); save(true); applyTheme(); toast('消去しました'); location.hash = '#list';
+    };
+  }
+
+  /* ---------------- 起動 ---------------- */
+  applyTheme(); updateNet(); refreshSpeciesList(); route();
+  window.VEG_APP = { state: () => S, version: VERSION };
+})();
+
+</script>
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+  }
+</script>
+</body>
+</html>

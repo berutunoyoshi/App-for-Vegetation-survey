@@ -1,0 +1,17 @@
+{
+  "name": "植生野帳 — 植物社会学的植生調査",
+  "short_name": "植生野帳",
+  "description": "Braun-Blanquet法による植生調査の記録・植生表・群落区分・遷移予測・植生図をオフラインで",
+  "lang": "ja",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#EEF2EC",
+  "theme_color": "#24543E",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
