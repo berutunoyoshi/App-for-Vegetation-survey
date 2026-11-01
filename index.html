@@ -76,7 +76,10 @@ a { color: var(--forest); }
   height: 52px; padding: 0 16px; background: var(--forest); color: var(--forest-ink);
 }
 .brand { display: flex; align-items: center; gap: 10px; color: inherit; text-decoration: none; font-weight: 700; font-size: 1.1rem; letter-spacing: .04em; }
-.net { font-size: .8rem; padding: 2px 10px; border-radius: 99px; background: rgba(255,255,255,.18); }
+.appbar { gap: 10px; }
+.projbtn { flex: 1; min-width: 0; color: inherit; text-decoration: none; font-size: .85rem; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: .92; }
+.projbtn span::before { content: "▸ "; }
+.net { flex: none; font-size: .8rem; padding: 2px 10px; border-radius: 99px; background: rgba(255,255,255,.18); }
 .net.off { background: var(--tape); color: #fff; }
 
 /* ---- 下部タブ ---- */
@@ -271,10 +274,36 @@ table.plain input { min-height: 34px; padding: 2px 6px; }
   .tablewrap { max-height: none; overflow: visible; border: none; }
 }
 
+/* ---- プロジェクト・保存状態 ---- */
+.pcard { background: var(--surface); border: 1px solid var(--line); border-left: 6px solid var(--L-S); border-radius: var(--radius); padding: 12px 14px; }
+.pcard.current { border-left-color: var(--tape); }
+.pcard .pname { font-size: 1.08rem; }
+.pcard .meta { color: var(--muted); font-size: .85rem; margin-top: 4px; }
+.pcard .acts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.badge.saved { background: color-mix(in srgb, var(--forest) 14%, transparent); border-color: var(--forest); color: var(--forest); }
+.badge.draft { background: var(--warn-soft); border-color: var(--warn); color: var(--warn); }
+.savebar { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+.st-draft { color: var(--warn); }
+.st-saved { color: var(--forest); }
+details.why { margin-top: 8px; border-top: 1px dashed var(--line); padding-top: 6px; }
+details.why > summary { cursor: pointer; font-size: .88rem; font-weight: 700; color: var(--forest); }
+details.why { overflow-x: auto; }
+details.why table { margin-top: 6px; font-size: .8rem; white-space: nowrap; width: auto; min-width: 100%; }
+details.why td, details.why th { padding: 3px 8px 3px 0; }
+tr.absent td { color: var(--muted); }
+.badge.tag-a { background: color-mix(in srgb, var(--forest) 16%, transparent); border-color: var(--forest); }
+.badge.tag-b { background: color-mix(in srgb, var(--g0) 16%, transparent); border-color: var(--g0); }
+.badge.tag-c { background: var(--warn-soft); border-color: var(--warn); }
+ol.refs { padding-left: 1.6em; font-size: .85rem; }
+ol.refs li { margin-bottom: 6px; scroll-margin-top: 70px; }
+ol.refs li.hl { background: var(--tape-soft); }
+
 </style>
 <!-- 地図ライブラリ（初回オンライン時にキャッシュされ、以後オフラインでも動作） -->
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
 <script defer src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+<!-- Excel入出力ライブラリ（同上） -->
+<script defer src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
 </head>
 <body>
 <header class="appbar">
@@ -282,6 +311,7 @@ table.plain input { min-height: 34px; padding: 2px 6px; }
     <svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><rect x="3" y="3" width="26" height="26" rx="3" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M8 24V14M13 24V9M18 24v-7M23 24v-4" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
     <span>植生野帳</span>
   </a>
+  <a href="#home" class="projbtn" title="プロジェクトを切り替える"><span id="projName"></span></a>
   <span id="netStatus" class="net" role="status"></span>
 </header>
 
@@ -829,43 +859,52 @@ VEG.Analysis = (function () {
 
   const ADJ = { ST: ['WE'], WE: ['CD', 'ST'], CD: ['WE', 'SA', 'MX'], MX: ['CD', 'SA'], SA: ['CD', 'MX', 'AL'], AL: ['SA'] };
 
+  /* 判定パラメータ（設定から変更可能） */
+  const DEFAULT_WEIGHTS = { char: 3, diff: 1.5, comp: 0.5, domBonus: 0.15, adjZone: 0.75, wrongZone: 0.4, outRegion: 0.6, seaMismatch: 0.8 };
+  /* 被度係数：被度が大きい種ほど一致の寄与を大きくする（r → 0.62、5 → 1.00） */
+  function coverFactor(c) { return 0.6 + 0.4 * Math.min(1, Math.log10(1 + c) / Math.log10(88.5)); }
+
   function identify(r, syntaxa, settings) {
+    const W = Object.assign({}, DEFAULT_WEIGHTS, (settings && settings.weights) || {});
     const ctx = contextOf(r, settings);
     const present = new Map();
     (r.records || []).forEach(rec => {
       const m = VEG.coverMid(rec.cover);
-      present.set(rec.sp, Math.max(present.get(rec.sp) || 0, m));
+      if (!present.has(rec.sp) || m > present.get(rec.sp).mid) present.set(rec.sp, { mid: m, cover: rec.cover, layer: rec.layer });
     });
     if (!present.size) return { ctx, results: [] };
-    // 最上層の優占種
     const topLayer = ['T1', 'T2', 'S', 'H', 'M'].find(L => (r.records || []).some(x => x.layer === L));
     let dominant = null, dm = -1;
     (r.records || []).filter(x => x.layer === topLayer).forEach(x => { const m = VEG.coverMid(x.cover); if (m > dm) { dm = m; dominant = x.sp; } });
 
     const results = syntaxa.map(s => {
-      const w = (sp, base) => {
-        if (!present.has(sp)) return 0;
-        const c = present.get(sp);
-        return base * (0.6 + 0.4 * Math.min(1, Math.log10(1 + c) / Math.log10(88.5)));
-      };
+      const parts = [];
       let got = 0, max = 0;
       const hitChar = [], hitDiff = [], miss = [];
-      (s.char || []).forEach(sp => { max += 3; const v = w(sp, 3); got += v; (v ? hitChar : miss).push(sp); });
-      (s.diff || []).forEach(sp => { max += 1.5; const v = w(sp, 1.5); got += v; if (v) hitDiff.push(sp); });
-      (s.comp || []).forEach(sp => { max += 0.5; got += w(sp, 0.5); });
-      let floristic = max ? got / max : 0;
-      if (dominant && s.char && s.char[0] === dominant) floristic = Math.min(1, floristic + 0.15);
-      // 地理・植生帯の整合
-      let geo = 1; const flags = [];
+      const add = (sp, role, w) => {
+        max += w;
+        const p = present.get(sp);
+        const f = p ? coverFactor(p.mid) : 0;
+        got += w * f;
+        parts.push({ sp, role, w, present: !!p, cover: p ? p.cover : '', factor: f, contrib: w * f });
+        return !!p;
+      };
+      (s.char || []).forEach(sp => { (add(sp, '標徴種・優占種', W.char) ? hitChar : miss).push(sp); });
+      (s.diff || []).forEach(sp => { if (add(sp, '識別種', W.diff)) hitDiff.push(sp); });
+      (s.comp || []).forEach(sp => { add(sp, '随伴種', W.comp); });
+      const raw = max ? got / max : 0;
+      const domHit = !!(dominant && s.char && s.char[0] === dominant);
+      const floristic = Math.min(1, raw + (domHit ? W.domBonus : 0));
+      const geoParts = [];
       if (ctx.zone) {
-        if (s.zones.includes(ctx.zone)) geo *= 1;
-        else if ((ADJ[ctx.zone] || []).some(z => s.zones.includes(z))) { geo *= 0.75; flags.push('隣接植生帯'); }
-        else { geo *= 0.4; flags.push('植生帯が不一致'); }
-      }
-      if (s.regions && s.regions.length && ctx.region && !s.regions.includes(ctx.region)) { geo *= 0.6; flags.push('分布域外の地方'); }
-      if (s.sea && ctx.sea && s.sea !== ctx.sea) { geo *= 0.8; flags.push(s.sea === 'J' ? '日本海側型' : '太平洋側型'); }
-      const score = floristic * geo;
-      return { s, score, floristic, geo, hitChar, hitDiff, miss, flags };
+        if (s.zones.includes(ctx.zone)) geoParts.push({ label: '植生帯が一致（' + VEG.ZONES[ctx.zone].short + '）', mult: 1 });
+        else if ((ADJ[ctx.zone] || []).some(z => s.zones.includes(z))) geoParts.push({ label: '隣接する植生帯の群集', mult: W.adjZone, flag: '隣接植生帯' });
+        else geoParts.push({ label: '植生帯が不一致', mult: W.wrongZone, flag: '植生帯が不一致' });
+      } else geoParts.push({ label: '植生帯不明（都道府県未設定）', mult: 1 });
+      if (s.regions && s.regions.length && ctx.region && !s.regions.includes(ctx.region)) geoParts.push({ label: '分布域外の地方（' + ctx.region + '）', mult: W.outRegion, flag: '分布域外の地方' });
+      if (s.sea && ctx.sea && s.sea !== ctx.sea) geoParts.push({ label: (s.sea === 'J' ? '日本海側型' : '太平洋側型') + 'の群集', mult: W.seaMismatch, flag: s.sea === 'J' ? '日本海側型' : '太平洋側型' });
+      const geo = geoParts.reduce((a, g) => a * g.mult, 1);
+      return { s, score: floristic * geo, floristic, raw, got, max, domHit, dominant, geo, geoParts, parts, hitChar, hitDiff, miss, flags: geoParts.filter(g => g.flag).map(g => g.flag), weights: W };
     }).filter(x => x.hitChar.length + x.hitDiff.length > 0)
       .sort((a, b) => b.score - a.score);
     return { ctx, dominant, results: results.slice(0, 6) };
@@ -881,7 +920,7 @@ VEG.Analysis = (function () {
       .sort((a, b) => (b.s.stage - a.s.stage) || (b.seaMatch - a.seaMatch));
   }
 
-  return { buildMatrix, distance, upgma, cutTree, differentials, sortedTable, synoptic, identify, contextOf, candidatesFor, groupLabel, labelOf, constancyClass };
+  return { DEFAULT_WEIGHTS, coverFactor, buildMatrix, distance, upgma, cutTree, differentials, sortedTable, synoptic, identify, contextOf, candidatesFor, groupLabel, labelOf, constancyClass };
 })();
 
 /* ===== succession.js ===== */
@@ -1008,25 +1047,27 @@ VEG.Succession = (function () {
     const regen = spCover(r, late, ['T2', 'S', 'H']);
     const regenSp = Array.from(new Set((r.records || []).filter(x => late.includes(x.sp) && ['T2', 'S', 'H'].includes(x.layer)).map(x => x.sp)));
     let factor = 1;
+    const mods = [];
+    const mod = (mult, label) => { factor *= mult; mods.push({ mult, label }); };
     if (stage >= 4 && stage <= 6) {
-      if (regen >= 17.5) { factor *= 0.7; notes.push(`下層に極相構成種（${regenSp.join('、')}）が多く、遷移は速く進む見込みです。`); }
-      else if (regen > 0) { factor *= 0.85; notes.push(`下層に極相構成種（${regenSp.join('、')}）が侵入しています。`); }
-      else if (stage >= 5) { factor *= 1.3; notes.push('下層に極相構成種が見られません。種子供給源（近隣の自然林）からの距離が遷移速度を左右します。'); }
+      if (regen >= 17.5) { mod(0.7, '下層の極相構成種：合計被度2以上'); notes.push(`下層に極相構成種（${regenSp.join('、')}）が多く、遷移は速く進む見込みです。`); }
+      else if (regen > 0) { mod(0.85, '下層の極相構成種：侵入あり'); notes.push(`下層に極相構成種（${regenSp.join('、')}）が侵入しています。`); }
+      else if (stage >= 5) { mod(1.3, '下層の極相構成種：なし'); notes.push('下層に極相構成種が見られません。種子供給源（近隣の自然林）からの距離が遷移速度を左右します。'); }
     }
     // 遷移停滞要因
     const arrest = (r.records || []).filter(x => VEG.ARRESTING.includes(x.sp) && ['S', 'H'].includes(x.layer) && VEG.coverMid(x.cover) >= 62.5);
-    if (arrest.length) { factor *= 1.8; notes.push(`林床・低木層で${arrest.map(x => x.sp).join('、')}が高被度（4以上）です。ササ・つる植物の密生は後継樹の定着を妨げ、遷移が停滞しやすくなります。`); }
-    if (site.dry) { factor *= 1.25; notes.push('乾性・未熟な立地のため遷移はやや遅く、アカマツ林などの土地的極相に留まる可能性があります。'); }
-    if (site.steep) { factor *= 1.15; notes.push('急傾斜のため表土移動が起こりやすく、遷移が遅れる傾向があります。'); }
+    if (arrest.length) { mod(1.8, '遷移停滞種（' + arrest.map(x => x.sp).join('、') + '）が被度4以上'); notes.push(`林床・低木層で${arrest.map(x => x.sp).join('、')}が高被度（4以上）です。ササ・つる植物の密生は後継樹の定着を妨げ、遷移が停滞しやすくなります。`); }
+    if (site.dry) { mod(1.25, '乾性・未熟土・尾根の立地'); notes.push('乾性・未熟な立地のため遷移はやや遅く、アカマツ林などの土地的極相に留まる可能性があります。'); }
+    if (site.steep) { mod(1.15, '急傾斜（35°以上）'); notes.push('急傾斜のため表土移動が起こりやすく、遷移が遅れる傾向があります。'); }
     if (/シカ/.test(r.impact || '')) { notes.push('シカ食害の記録があります。シナリオ「シカ高密度」も確認してください。'); }
 
-    factor = Math.min(3, factor);
+    if (factor > 3) { mods.push({ mult: 3 / factor, label: '補正の上限（×3）を適用' }); factor = 3; }
     // 特殊系列（湿地・海岸）
     let series = 'zonal';
     if (site.wetland) series = 'wetland';
     else if (site.coastal && stage <= 3) series = 'coastal';
 
-    const Y = VEG.STAGE_YEARS[zone] || VEG.STAGE_YEARS.WE;
+    const Y = (settings && settings.stageYears && settings.stageYears[zone]) || VEG.STAGE_YEARS[zone] || VEG.STAGE_YEARS.WE;
     const maxStage = zone === 'AL' ? 3 : 7;
     let path = [];
     let startStage = stage;
@@ -1037,7 +1078,7 @@ VEG.Succession = (function () {
     if (scen === 'clearcut') {
       if (stage >= 5) { startStage = 1; notes.push('皆伐後は一年生草本→先駆低木を経て、切株からの萌芽により陽樹二次林へ早く戻ります。'); }
     }
-    if (scen === 'deer') { capStage = Math.min(stage, 5); factor *= 1.6; notes.push('シカの採食圧が続くと林床植生が衰退し、不嗜好性植物（イワヒメワラビ、シロダモ、アセビ等）が優占して更新が妨げられます。'); }
+    if (scen === 'deer') { capStage = Math.min(stage, 5); mod(1.6, 'シナリオ：シカ高密度'); notes.push('シカの採食圧が続くと林床植生が衰退し、不嗜好性植物（イワヒメワラビ、シロダモ、アセビ等）が優占して更新が妨げられます。'); }
 
     const climaxRank = climaxFor(ctx, syntaxa, site, r);
     const climax = climaxRank[0] ? climaxRank[0].s : null;
@@ -1090,7 +1131,7 @@ VEG.Succession = (function () {
     if (zone === 'AL') notes.push('高山帯では森林への遷移は起こらず、草本・矮性低木群落が持続します。');
     return {
       ctx: Object.assign({}, ctx, { zone }), stage, structuralStage: sStage, current, path, at, notes,
-      factor, climax, climaxRank: climaxRank.slice(0, 3), regenSp, series, scenario: scen
+      factor, mods, yearsTable: Y, climax, climaxRank: climaxRank.slice(0, 3), regenSp, series, scenario: scen
     };
   }
 
@@ -1139,13 +1180,394 @@ VEG.sampleReleves = function () {
   ];
 };
 
+/* ===== excel.js ===== */
+/* =========================================================
+   Excel入出力（SheetJS Community Edition を使用）
+   シート構成
+     説明          …使い方と記入ルール
+     調査区        …1行＝1調査区（環境情報・階層構造）        ［読込対象］
+     出現種        …1行＝1記録（調査区番号・階層・種名・被度・群度）［読込対象］
+     植生区画      …植生図の区画（座標はWKT）                  ［読込対象］
+     群集参照DB    …内蔵＋追加の群集。出典区分「追加」の行を読込  ［読込対象］
+     遷移年数／植生帯境界／判定パラメータ …計算の設定値            ［読込対象］
+     素表／区分表／常在度表／群集判定／遷移予測 …解析結果（書き出しのみ）
+   ========================================================= */
+'use strict';
+window.VEG = window.VEG || {};
+VEG.Excel = (function () {
+  const available = () => !!window.XLSX;
+
+  const LAYER_JP = { T1: '高木層', T2: '亜高木層', S: '低木層', H: '草本層', M: 'コケ層' };
+  const LAYER_FROM = Object.assign({}, ...Object.entries(LAYER_JP).map(([k, v]) => ({ [v]: k, [k]: k, [v.replace('層', '')]: k })));
+  const TYPE_JP = { climax: '極相', substitute: '代償植生', pioneer: '先駆群落', edaphic: '立地的群落', plantation: '植林' };
+  const TYPE_FROM = Object.assign({}, ...Object.entries(TYPE_JP).map(([k, v]) => ({ [v]: k, [k]: k })));
+  const ZONE_FROM = Object.assign({}, ...Object.entries(VEG.ZONES).map(([k, v]) => ({ [v.short]: k, [k]: k })));
+  const SEA_JP = { J: '日本海側', P: '太平洋側' };
+  const SEA_FROM = { '日本海側': 'J', '太平洋側': 'P', J: 'J', P: 'P' };
+  const PLOT_FROM = Object.assign({}, ...VEG.PLOT_GUIDE.map(p => ({ [p.name]: p.type, [p.type]: p.type })));
+
+  const RELEVE_COLS = [
+    ['code', '調査区番号'], ['date', '調査日'], ['observer', '調査者'], ['pref', '都道府県'], ['site', '地点名'],
+    ['lat', '緯度'], ['lng', '経度'], ['elev', '標高(m)'], ['slope', '傾斜(°)'], ['aspect', '方位'],
+    ['topo', '微地形'], ['soil', '土壌'], ['moist', '土壌の湿り'], ['impact', '人為的影響'], ['yearsSince', '攪乱後の年数'],
+    ['plotType', '群落の種類'], ['size', '区画'], ['area', '面積(m2)']
+  ].concat(...VEG.LAYERS.map(L => [['L_' + L.id + '_h', L.name + '_高さ(m)'], ['L_' + L.id + '_cov', L.name + '_植被率(%)']]))
+    .concat([['zoneOverride', '植生帯の指定'], ['seaOverride', '気候区分の指定'], ['group', '群（手動）'], ['include', '解析に含める'], ['status', '状態'], ['notes', 'メモ'], ['id', '内部ID']]);
+  const REC_COLS = ['調査区番号', '階層', '種名', '被度', '群度'];
+
+  function releveRow(r) {
+    return RELEVE_COLS.map(([k]) => {
+      if (k.startsWith('L_')) { const [, L, f] = k.split('_'); return ((r.layers || {})[L] || {})[f] ?? ''; }
+      if (k === 'plotType') return (VEG.PLOT_GUIDE.find(p => p.type === r.plotType) || {}).name || '';
+      if (k === 'zoneOverride') return r.zoneOverride ? VEG.ZONES[r.zoneOverride].short : '';
+      if (k === 'seaOverride') return SEA_JP[r.seaOverride] || '';
+      if (k === 'include') return r.include === false ? 0 : 1;
+      if (k === 'status') return r.savedAt ? '保存済み' : '下書き';
+      const v = r[k];
+      return v == null ? '' : v;
+    });
+  }
+  const num = v => (v === '' || v == null || isNaN(+v)) ? v : +v;
+  function sheet(rows, widths) {
+    const ws = XLSX.utils.aoa_to_sheet(rows.map(r => r.map(num)));
+    ws['!cols'] = (widths || rows[0] || []).map((h, i) => ({ wch: widths ? widths[i] : Math.max(8, Math.min(40, String(h).length * 2 + 2)) }));
+    return ws;
+  }
+  function add(wb, name, rows, widths) { XLSX.utils.book_append_sheet(wb, sheet(rows, widths), name); }
+
+  function wkt(f) {
+    const ring = (f.geometry && f.geometry.coordinates && f.geometry.coordinates[0]) || [];
+    return 'POLYGON((' + ring.map(c => c[0] + ' ' + c[1]).join(', ') + '))';
+  }
+  function parseWKT(s) {
+    const m = /POLYGON\s*\(\(\s*(.+?)\s*\)\)/i.exec(String(s || ''));
+    if (!m) return null;
+    const ring = m[1].split(',').map(p => p.trim().split(/\s+/).map(Number)).filter(p => p.length >= 2 && !isNaN(p[0]) && !isNaN(p[1]));
+    if (ring.length < 4) return null;
+    return { type: 'Polygon', coordinates: [ring.map(p => [p[0], p[1]])] };
+  }
+
+  function guideRows(projectName) {
+    return [
+      ['植生野帳 Excelファイル', ''],
+      ['プロジェクト', projectName || ''],
+      ['書き出し日時', new Date().toLocaleString('ja-JP')],
+      ['', ''],
+      ['シート', '内容'],
+      ['調査区', '1行＝1調査区。「調査区番号」は必須で、出現種シートとの対応に使います。'],
+      ['出現種', '1行＝1記録。同じ種が複数の階層に出る場合は階層ごとに1行。'],
+      ['植生区画', '植生図の区画。座標はWKT形式（経度 緯度の順、最初と最後の点は同じ）。'],
+      ['群集参照DB', '「出典区分」が「追加」の行だけを読み込みます。地域の群集を追加するときは行を足して「追加」と記入。'],
+      ['遷移年数', '植生帯・段階ごとに留まる年数（早い／標準／遅い）。書き換えて読み込むと計算に反映。'],
+      ['植生帯境界', '都道府県ごとの植生帯の境界標高と気候区分。書き換えて読み込むと反映。'],
+      ['判定パラメータ', '群集の適合度の重みと係数。書き換えて読み込むと反映。'],
+      ['素表〜遷移予測', '解析結果です（読み込みでは使いません）。'],
+      ['', ''],
+      ['記入ルール', ''],
+      ['階層', '高木層／亜高木層／低木層／草本層／コケ層（T1, T2, S, H, M も可）'],
+      ['被度', 'r, +, 1, 2, 3, 4, 5'],
+      ['群度', '1, 2, 3, 4, 5'],
+      ['都道府県', '「東京都」「北海道」のように正式名称で'],
+      ['方位', VEG.ASPECTS.filter(Boolean).join(', ')],
+      ['微地形', VEG.TOPO.filter(Boolean).join(', ')],
+      ['土壌', VEG.SOIL.filter(Boolean).join(', ')],
+      ['土壌の湿り', VEG.MOIST.filter(Boolean).join(', ')],
+      ['人為的影響', VEG.IMPACT.filter(Boolean).join(', ')],
+      ['群落の種類', VEG.PLOT_GUIDE.map(p => p.name).join(', ')],
+      ['植生帯の指定', '空欄なら都道府県と標高から推定。指定する場合：' + Object.values(VEG.ZONES).map(z => z.short).join(', ')],
+      ['気候区分の指定', '空欄なら都道府県から推定。指定する場合：日本海側, 太平洋側'],
+      ['解析に含める', '1＝含める、0＝含めない'],
+      ['調査日', '2026-06-15 の形式、またはExcelの日付'],
+      ['内部ID', 'アプリが使う識別子。新しい行では空欄のままで構いません。']
+    ];
+  }
+
+  function configSheets(wb, cfg, syntaxa) {
+    const custom = new Set(((cfg && cfg.customSyntaxa) || []).map(s => s.id));
+    add(wb, '群集参照DB', [['ID', '群集名', '学名', 'クラス', '区分', '遷移段階(0-7)', '植生帯', '地方', '気候区分', '標徴種・優占種', '識別種', '随伴種', '説明', '出典区分']]
+      .concat(syntaxa.map(s => [s.id, s.ja, s.la, s.cls, TYPE_JP[s.type] || s.type, s.stage, s.zones.map(z => VEG.ZONES[z] ? VEG.ZONES[z].short : z).join(', '), (s.regions || []).join(', '), SEA_JP[s.sea] || '', (s.char || []).join(', '), (s.diff || []).join(', '), (s.comp || []).join(', '), s.note || '', custom.has(s.id) ? '追加' : '内蔵'])),
+      [24, 30, 36, 20, 10, 8, 18, 24, 10, 36, 30, 30, 40, 8]);
+    const yr = [['植生帯', '段階番号', '段階', '早い(年)', '標準(年)', '遅い(年)']];
+    Object.keys(VEG.ZONES).forEach(z => { const Y = (cfg.stageYears && cfg.stageYears[z]) || VEG.STAGE_YEARS[z]; VEG.STAGES.forEach((st, i) => yr.push([VEG.ZONES[z].short, i, st.name].concat(Y[i]))); });
+    add(wb, '遷移年数', yr, [10, 8, 24, 9, 9, 9]);
+    add(wb, '植生帯境界', [['都道府県', '地方', '気候区分', '常緑広葉樹林域の上限(m)', '落葉広葉樹林域の上限(m)', '森林限界(m)']]
+      .concat(VEG.PREFS.map(p => { const o = Object.assign({}, p, (cfg.prefOverrides || {})[p.name] || {}); return [p.name, p.region, SEA_JP[o.sea], o.ev, o.cd, o.sa]; })), [10, 10, 10, 22, 22, 14]);
+    const W = Object.assign({}, VEG.Analysis.DEFAULT_WEIGHTS, cfg.weights || {});
+    const lab = { char: '標徴種・優占種の重み', diff: '識別種の重み', comp: '随伴種の重み', domBonus: '優占種一致の加点', adjZone: '隣接植生帯の係数', wrongZone: '植生帯不一致の係数', outRegion: '分布域外の地方の係数', seaMismatch: '日本海側／太平洋側不一致の係数' };
+    add(wb, '判定パラメータ', [['キー', '項目', '値', '既定値']].concat(Object.keys(lab).map(k => [k, lab[k], W[k], VEG.Analysis.DEFAULT_WEIGHTS[k]])), [14, 34, 8, 8]);
+  }
+
+  /* ---------- 書き出し ---------- */
+  function exportProject(project, ctx) {
+    const wb = XLSX.utils.book_new();
+    const rs = project.releves;
+    add(wb, '説明', guideRows(project.name), [18, 90]);
+    add(wb, '調査区', [RELEVE_COLS.map(c => c[1])].concat(rs.map(releveRow)));
+    const rec = [REC_COLS];
+    rs.forEach(r => (r.records || []).forEach(x => rec.push([r.code, LAYER_JP[x.layer] || x.layer, x.sp, x.cover, x.soc])));
+    add(wb, '出現種', rec, [12, 10, 22, 6, 6]);
+    add(wb, '植生区画', [['群落名', 'メモ', '面積(ha)', '座標(WKT)']].concat((project.features || []).map(f => [f.properties.community, f.properties.note || '', ctx.polyArea ? +ctx.polyArea(f).toFixed(3) : '', wkt(f)])), [30, 30, 10, 80]);
+    if (ctx.tables) Object.entries(ctx.tables).forEach(([name, rows]) => rows && rows.length && add(wb, name, rows));
+    if (ctx.idRows) add(wb, '群集判定', ctx.idRows);
+    if (ctx.sucRows) add(wb, '遷移予測', ctx.sucRows);
+    configSheets(wb, project.config, ctx.syntaxa);
+    XLSX.writeFile(wb, ctx.filename || '植生調査.xlsx');
+  }
+  function exportReleve(project, r, ctx) {
+    const wb = XLSX.utils.book_new();
+    add(wb, '説明', guideRows(project.name + '／' + r.code), [18, 90]);
+    add(wb, '調査区', [RELEVE_COLS.map(c => c[1]), releveRow(r)]);
+    add(wb, '出現種', [REC_COLS].concat((r.records || []).map(x => [r.code, LAYER_JP[x.layer] || x.layer, x.sp, x.cover, x.soc])), [12, 10, 22, 6, 6]);
+    if (ctx.idRows) add(wb, '群集判定', ctx.idRows);
+    if (ctx.sucRows) add(wb, '遷移予測', ctx.sucRows);
+    XLSX.writeFile(wb, ctx.filename);
+  }
+  function exportTemplate(cfg, syntaxa) {
+    const wb = XLSX.utils.book_new();
+    add(wb, '説明', guideRows('（記入用テンプレート）'), [18, 90]);
+    const ex = { code: 'R001', date: '2026-06-15', observer: '山田', pref: '千葉県', site: '〇〇神社 社叢', lat: 35.16, lng: 140.15, elev: 210, slope: 25, aspect: 'NE', topo: '斜面中部', soil: '褐色森林土', moist: '適潤', impact: 'なし（自然状態）', yearsSince: '', plotType: 'forest', size: '15×15', area: 225, include: true, layers: { T1: { h: 18, cov: 85 }, T2: { h: 9, cov: 30 }, S: { h: 3, cov: 25 }, H: { h: 0.6, cov: 30 }, M: { h: '', cov: 5 } }, notes: '記入例（この行は消して使ってください）' };
+    add(wb, '調査区', [RELEVE_COLS.map(c => c[1]), releveRow(ex).map((v, i) => RELEVE_COLS[i][0] === 'status' || RELEVE_COLS[i][0] === 'id' ? '' : v)]);
+    add(wb, '出現種', [REC_COLS, ['R001', '高木層', 'スダジイ', '5', '5'], ['R001', '低木層', 'アオキ', '2', '2'], ['R001', '草本層', 'ヤブコウジ', '+', '1']], [12, 10, 22, 6, 6]);
+    add(wb, '植生区画', [['群落名', 'メモ', '面積(ha)', '座標(WKT)']], [30, 30, 10, 80]);
+    configSheets(wb, cfg, syntaxa);
+    XLSX.writeFile(wb, '植生野帳_記入用テンプレート.xlsx');
+  }
+
+  /* ---------- 読み込み ---------- */
+  function rowsOf(wb, name) {
+    const ws = wb.Sheets[name];
+    if (!ws) return null;
+    const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: true });
+    if (!aoa.length) return [];
+    const head = aoa[0].map(h => String(h).trim());
+    return aoa.slice(1).filter(r => r.some(v => String(v).trim() !== '')).map(r => { const o = {}; head.forEach((h, i) => { o[h] = r[i]; }); return o; });
+  }
+  const str = v => (v instanceof Date) ? v.toISOString().slice(0, 10) : String(v == null ? '' : v).trim();
+
+  function importWorkbook(buf) {
+    const wb = XLSX.read(buf, { type: 'array', cellDates: true });
+    const warn = [];
+    const out = { releves: [], features: [], config: {}, warnings: warn, sheets: wb.SheetNames };
+    const rRows = rowsOf(wb, '調査区');
+    const sRows = rowsOf(wb, '出現種');
+    if (!rRows && !sRows) throw new Error('「調査区」または「出現種」シートが見つかりません');
+    const byCode = new Map();
+    const validCover = new Set(['r', '+', '1', '2', '3', '4', '5']);
+    (rRows || []).forEach((row, i) => {
+      const r = { layers: {}, records: [] };
+      RELEVE_COLS.forEach(([k, h]) => {
+        const v = row[h];
+        if (k.startsWith('L_')) { const [, L, f] = k.split('_'); r.layers[L] = r.layers[L] || { h: '', cov: '' }; r.layers[L][f] = str(v); return; }
+        r[k] = str(v);
+      });
+      if (!r.code) { warn.push(`調査区シート ${i + 2}行目：調査区番号が空のため読み飛ばしました`); return; }
+      if (r.date && /^\d+(\.\d+)?$/.test(r.date)) { const d = XLSX.SSF.parse_date_code(+r.date); if (d) r.date = `${d.y}-${String(d.m).padStart(2, '0')}-${String(d.d).padStart(2, '0')}`; }
+      r.plotType = PLOT_FROM[r.plotType] || 'forest';
+      r.zoneOverride = ZONE_FROM[r.zoneOverride] || '';
+      r.seaOverride = SEA_FROM[r.seaOverride] || '';
+      r.include = !(r.include === '0' || r.include === 'FALSE' || r.include === 'false' || r.include === '×');
+      if (r.pref && !VEG.PREFS.some(p => p.name === r.pref)) warn.push(`調査区 ${r.code}：都道府県「${r.pref}」が正式名称ではありません`);
+      r.savedAt = r.status === '保存済み' ? Date.now() : null;
+      delete r.status;
+      if (byCode.has(r.code)) warn.push(`調査区番号 ${r.code} が重複しています（後の行を使用）`);
+      byCode.set(r.code, r);
+    });
+    (sRows || []).forEach((row, i) => {
+      const code = str(row['調査区番号']); const sp = str(row['種名']).replace(/\s+/g, '');
+      if (!code || !sp) return;
+      let r = byCode.get(code);
+      if (!r) { r = { code, layers: {}, records: [], plotType: 'forest', include: true }; byCode.set(code, r); warn.push(`調査区 ${code} は出現種シートにだけあるため、環境情報なしで作成しました`); }
+      const layer = LAYER_FROM[str(row['階層'])];
+      if (!layer) { warn.push(`出現種シート ${i + 2}行目：階層「${str(row['階層'])}」を判別できず読み飛ばしました`); return; }
+      let cover = str(row['被度']).toLowerCase(); if (cover === 'ｒ') cover = 'r'; if (cover === '＋') cover = '+';
+      if (!validCover.has(cover)) { warn.push(`出現種シート ${i + 2}行目：被度「${cover}」は無効のため「+」にしました`); cover = '+'; }
+      let soc = str(row['群度']); if (!/^[1-5]$/.test(soc)) soc = '1';
+      const ex = r.records.find(x => x.sp === sp && x.layer === layer);
+      if (ex) { ex.cover = cover; ex.soc = soc; warn.push(`調査区 ${code}：${sp}（${LAYER_JP[layer]}）が重複（後の行を使用）`); }
+      else r.records.push({ sp, layer, cover, soc });
+    });
+    out.releves = Array.from(byCode.values());
+
+    const fRows = rowsOf(wb, '植生区画');
+    (fRows || []).forEach((row, i) => {
+      if (/^[（(]/.test(str(row['群落名']))) return; // 記入例の行
+      const g = parseWKT(row['座標(WKT)']);
+      if (!g) { if (str(row['群落名'])) warn.push(`植生区画シート ${i + 2}行目：座標を読み取れませんでした`); return; }
+      out.features.push({ type: 'Feature', properties: { community: str(row['群落名']) || '名称なし', note: str(row['メモ']) }, geometry: g });
+    });
+
+    const dbRows = rowsOf(wb, '群集参照DB');
+    if (dbRows) {
+      const custom = dbRows.filter(x => str(x['出典区分']) !== '内蔵' && str(x['群集名'])).map(x => ({
+        id: str(x['ID']) || 'c-' + str(x['群集名']), ja: str(x['群集名']), la: str(x['学名']), cls: str(x['クラス']),
+        type: TYPE_FROM[str(x['区分'])] || 'climax', stage: Math.max(0, Math.min(7, parseInt(x['遷移段階(0-7)'], 10) || 7)),
+        zones: str(x['植生帯']).split(/[,、\s]+/).map(z => ZONE_FROM[z]).filter(Boolean),
+        regions: str(x['地方']).split(/[,、\s]+/).filter(z => VEG.REGIONS.includes(z)), sea: SEA_FROM[str(x['気候区分'])] || '',
+        char: str(x['標徴種・優占種']).split(/[,、]\s*/).map(s => s.trim()).filter(Boolean),
+        diff: str(x['識別種']).split(/[,、]\s*/).map(s => s.trim()).filter(Boolean),
+        comp: str(x['随伴種']).split(/[,、]\s*/).map(s => s.trim()).filter(Boolean), note: str(x['説明'])
+      }));
+      custom.forEach(s => { if (!s.zones.length) { s.zones = ['WE']; warn.push(`群集参照DB「${s.ja}」：植生帯が空のため暖温帯としました`); } if (!s.char.length) warn.push(`群集参照DB「${s.ja}」：標徴種・優占種が空です`); });
+      out.config.customSyntaxa = custom.filter(s => s.char.length);
+    }
+    const yRows = rowsOf(wb, '遷移年数');
+    if (yRows) {
+      const sy = {}; let changed = false;
+      yRows.forEach(x => {
+        const z = ZONE_FROM[str(x['植生帯'])]; const i = parseInt(x['段階番号'], 10);
+        if (!z || isNaN(i) || i < 0 || i > 7) return;
+        sy[z] = sy[z] || VEG.STAGE_YEARS[z].map(a => a.slice());
+        const v = [+x['早い(年)'], +x['標準(年)'], +x['遅い(年)']];
+        if (v.some(n => isNaN(n) || n < 0)) { warn.push(`遷移年数：${str(x['植生帯'])} 段階${i} の値が不正なため既定値を使います`); return; }
+        if (v.join() !== VEG.STAGE_YEARS[z][i].join()) changed = true;
+        sy[z][i] = v;
+      });
+      if (changed) out.config.stageYears = sy;
+    }
+    const zRows = rowsOf(wb, '植生帯境界');
+    if (zRows) {
+      const po = {};
+      zRows.forEach(x => {
+        const p = VEG.PREFS.find(q => q.name === str(x['都道府県'])); if (!p) return;
+        const o = {}; const ev = +x['常緑広葉樹林域の上限(m)'], cd = +x['落葉広葉樹林域の上限(m)'], sa = +x['森林限界(m)'], sea = SEA_FROM[str(x['気候区分'])];
+        if (!isNaN(ev) && ev !== p.ev) o.ev = ev; if (!isNaN(cd) && cd !== p.cd) o.cd = cd; if (!isNaN(sa) && sa !== p.sa) o.sa = sa; if (sea && sea !== p.sea) o.sea = sea;
+        if (Object.keys(o).length) po[p.name] = o;
+      });
+      out.config.prefOverrides = po;
+    }
+    const wRows = rowsOf(wb, '判定パラメータ');
+    if (wRows) {
+      const w = {};
+      wRows.forEach(x => { const k = str(x['キー']); const v = +x['値']; if (k in VEG.Analysis.DEFAULT_WEIGHTS && !isNaN(v) && v >= 0) w[k] = v; });
+      out.config.weights = w;
+    }
+    return out;
+  }
+
+  return { RELEVE_COLS, REC_COLS, available, exportProject, exportReleve, exportTemplate, importWorkbook, LAYER_JP };
+})();
+
+/* ===== about.js ===== */
+/* =========================================================
+   根拠と出典（アプリ内の「根拠と出典」画面）
+   区分：［確立］＝文献で確立した方法・基準
+         ［慣行］＝広く使われるが唯一の基準ではない扱い
+         ［独自］＝本アプリが設定した目安（校正を推奨）
+   ========================================================= */
+'use strict';
+window.VEG = window.VEG || {};
+
+VEG.REFERENCES = [
+  { id: 'BB1964', text: 'Braun-Blanquet, J. (1964) Pflanzensoziologie. Grundzüge der Vegetationskunde. 3. Aufl. Springer, Wien.' },
+  { id: 'MDE1974', text: 'Mueller-Dombois, D. & Ellenberg, H. (1974) Aims and Methods of Vegetation Ecology. John Wiley & Sons, New York.' },
+  { id: 'CO2003', text: 'Chytrý, M. & Otýpková, Z. (2003) Plot sizes used for phytosociological sampling of European vegetation. Journal of Vegetation Science 14: 563–570.' },
+  { id: 'vdM1979', text: 'van der Maarel, E. (1979) Transformation of cover-abundance values in phytosociology and its effects on community similarity. Vegetatio 39: 97–114.' },
+  { id: 'BC1957', text: 'Bray, J. R. & Curtis, J. T. (1957) An ordination of the upland forest communities of southern Wisconsin. Ecological Monographs 27: 325–349.' },
+  { id: 'SM1958', text: 'Sokal, R. R. & Michener, C. D. (1958) A statistical method for evaluating systematic relationships. University of Kansas Science Bulletin 38: 1409–1438.' },
+  { id: 'LL2012', text: 'Legendre, P. & Legendre, L. (2012) Numerical Ecology. 3rd English ed. Elsevier, Amsterdam.' },
+  { id: 'C2002', text: 'Chytrý, M., Tichý, L., Holt, J. & Botta-Dukát, Z. (2002) Determination of diagnostic species with statistical fidelity measures. Journal of Vegetation Science 13: 79–90.' },
+  { id: 'T2002', text: 'Tichý, L. (2002) JUICE, software for vegetation classification. Journal of Vegetation Science 13: 451–453.' },
+  { id: 'TC2006', text: 'Tichý, L. & Chytrý, M. (2006) Statistical determination of diagnostic species for site groups of unequal size. Journal of Vegetation Science 17: 809–818.' },
+  { id: 'B2000', text: 'Bruelheide, H. (2000) A new measure of fidelity and its application to defining species groups. Journal of Vegetation Science 11: 167–178.' },
+  { id: 'M1980', text: '宮脇昭 編著（1980–1989）日本植生誌（全10巻）. 至文堂.' },
+  { id: 'MO1990', text: '宮脇昭・奥田重俊 編（1990）日本植物群落図説. 至文堂.' },
+  { id: 'MOE', text: '環境省 自然環境局 生物多様性センター：自然環境保全基礎調査（植生調査）植生図凡例・群落の解説（http://gis.biodic.go.jp/）.' },
+  { id: 'K1949', text: '吉良竜夫（1949）日本の森林帯. 日本林業技術協会.' },
+  { id: 'Tx1956', text: 'Tüxen, R. (1956) Die heutige potentielle natürliche Vegetation als Gegenstand der Vegetationskartierung. Angewandte Pflanzensoziologie 13: 5–42.' },
+  { id: 'C1916', text: 'Clements, F. E. (1916) Plant Succession: An Analysis of the Development of Vegetation. Carnegie Institution of Washington, Publication 242.' },
+  { id: 'FI2005', text: '福嶋司・岩瀬徹 編著（2005）図説 日本の植生. 朝倉書店.' },
+  { id: 'K1996', text: '亀山章 編（1996）雑木林の植生管理―その生態と共生の技術. ソフトサイエンス社.' },
+  { id: 'YM2006', text: '湯本貴和・松田裕之 編（2006）世界遺産をシカが喰う―シカと森の生態学. 文一総合出版.' }
+];
+
+VEG.aboutHTML = function (cfg) {
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const W = Object.assign({}, VEG.Analysis.DEFAULT_WEIGHTS, (cfg && cfg.weights) || {});
+  const ref = id => { const i = VEG.REFERENCES.findIndex(r => r.id === id); return `<a href="#about" data-ref="${id}">[${i + 1}]</a>`; };
+  const tag = t => `<span class="badge tag-${t === '確立' ? 'a' : t === '慣行' ? 'b' : 'c'}">${t}</span>`;
+  const cf = VEG.COVER_SCALES.bb7.classes.map(c => `<tr><td>${c.v}</td><td>${c.mid}%</td><td>${VEG.Analysis.coverFactor(c.mid).toFixed(2)}</td></tr>`).join('');
+  const years = Object.keys(VEG.ZONES).map(z => {
+    const Y = (cfg && cfg.stageYears && cfg.stageYears[z]) || VEG.STAGE_YEARS[z];
+    return `<tr><th>${esc(VEG.ZONES[z].short)}</th>${VEG.STAGES.slice(0, 7).map((s, i) => `<td>${Y[i][0]}／${Y[i][1]}／${Y[i][2]}</td>`).join('')}</tr>`;
+  }).join('');
+
+  return `
+  <h1>根拠と出典</h1>
+  <p class="lead">アプリの各計算が、文献で確立した方法なのか、本アプリが設定した目安なのかを示します。</p>
+  <p class="note">出典の書誌情報は、このアプリの作成時（AIアシスタントによる作成）の知識にもとづいて記載したもので、文献データベースでの照合はしていません。報告書や論文で引用する前に、必ず原典で著者・年・巻号・ページを確認してください。</p>
+  <p class="small">${tag('確立')} 文献で確立した方法・基準　${tag('慣行')} 広く使われるが唯一の基準ではない扱い　${tag('独自')} 本アプリが設定した目安（地域の文献や実測で校正を推奨）</p>
+
+  <section class="panel"><h2>調査方法</h2>
+    <h3>被度・群度の階級 ${tag('確立')}</h3>
+    <p>Braun-Blanquetの被度（r, +, 1〜5）と群度（1〜5）の階級をそのまま用いています ${ref('BB1964')}。</p>
+    <h3>調査区の面積の目安 ${tag('慣行')}</h3>
+    <p>群落の種類ごとの面積の範囲は、最小面積の考え方 ${ref('MDE1974')} と、ヨーロッパの植物社会学的調査で実際に使われた面積の集計 ${ref('CO2003')} を参考にした一般的な範囲です。地域や群落によって適切な面積は異なります。</p>
+  </section>
+
+  <section class="panel"><h2>植生表と群落区分</h2>
+    <h3>被度の数値化 ${tag('慣行')}</h3>
+    <p>計算では各被度階級を範囲の中央値（%）に置き換えています。被度階級の数値への変換方法は複数あり、変換の違いが類似度に与える影響は ${ref('vdM1979')} で検討されています。</p>
+    <h3>類似度と樹形図 ${tag('確立')}</h3>
+    <p>Bray-Curtis距離 ${ref('BC1957')}（被度中央値の平方根を使用）またはJaccard距離と、UPGMA法 ${ref('SM1958')} による階層的クラスタリングです。数値分類の手法としては一般的なもので ${ref('LL2012')}、植物社会学で用いられる手法の一例です。</p>
+    <h3>識別種の抽出 ${tag('確立')}（閾値は${tag('慣行')}）</h3>
+    <p>在・不在のφ係数で群への結びつき（適合度）を測る方法 ${ref('C2002')} で、JUICE ${ref('T2002')} でも使われています。既定の閾値（群内出現頻度50%以上、φ≧0.3、群外出現頻度35%以下）は表の見やすさを優先した目安で、画面で変更できます。群の大きさの違いを補正する標準化 ${ref('TC2006')} は現在のバージョンでは行っていません。</p>
+    <h3>常在度階級 ${tag('確立')}</h3>
+    <p>I（≦20%）〜V（＞80%）の5階級です ${ref('BB1964')}。</p>
+  </section>
+
+  <section class="panel" id="score"><h2>群集の適合度（%）の算出 ${tag('独自')}</h2>
+    <p>適合度は本アプリ独自の指標です。<b>確率でも統計的な有意性でもありません。</b>「参照DBに載っている代表種がどれだけ、どのくらいの被度で出ているか」と「その群集の分布域と調査地点が合っているか」を掛け合わせた目安です。標徴種・識別種による判定という植物社会学の考え方 ${ref('BB1964')} にもとづき、種群の出現で群集を割り当てる方法 ${ref('B2000')} に近い発想ですが、同じ計算ではありません。</p>
+    <p><b>適合度 ＝ 組成一致度 × 地理的整合係数</b>（0〜100%で表示）</p>
+    <p><b>組成一致度 ＝ Σ（役割の重み × 被度係数）÷ Σ（役割の重み）</b><br>
+      分母は参照DBに載っている全種の重みの合計、分子は調査区に出現した種だけの合計です。さらに、最上層の優占種がその群集の最初に挙げた種と一致すれば ${W.domBonus} を加えます（上限1）。</p>
+    <div class="tablewrap" style="max-height:none"><table class="plain"><thead><tr><th>役割</th><th>重み（現在値）</th></tr></thead><tbody>
+      <tr><td>標徴種・優占種</td><td>${W.char}</td></tr><tr><td>識別種</td><td>${W.diff}</td></tr><tr><td>随伴種</td><td>${W.comp}</td></tr></tbody></table></div>
+    <p style="margin-top:10px">被度係数 ＝ 0.6 ＋ 0.4 × log₁₀(1＋被度%) ÷ log₁₀(88.5)。1個体でも出ていれば約6割、被度5なら満点として数えます。</p>
+    <div class="tablewrap" style="max-height:none"><table class="plain"><thead><tr><th>被度</th><th>中央値</th><th>被度係数</th></tr></thead><tbody>${cf}</tbody></table></div>
+    <p style="margin-top:10px"><b>地理的整合係数</b>：都道府県・標高から推定した植生帯と地方、日本海側／太平洋側で、該当する条件の係数を掛け合わせます。</p>
+    <div class="tablewrap" style="max-height:none"><table class="plain"><tbody>
+      <tr><td>植生帯が一致</td><td>×1</td></tr><tr><td>隣接する植生帯の群集</td><td>×${W.adjZone}</td></tr><tr><td>植生帯が不一致</td><td>×${W.wrongZone}</td></tr>
+      <tr><td>群集の分布する地方の外</td><td>×${W.outRegion}</td></tr><tr><td>日本海側型／太平洋側型の不一致</td><td>×${W.seaMismatch}</td></tr></tbody></table></div>
+    <p class="small muted" style="margin-top:8px">重みと係数は「設定 → 判定の重みと係数」で変更でき、Excelにも書き出されます。各判定結果の「算出の内訳」で、種ごとの寄与と掛けた係数を確認できます。</p>
+  </section>
+
+  <section class="panel"><h2>群集参照DB ${tag('慣行')}／${tag('独自')}</h2>
+    <p>収録した群集名と学名は、日本の植物社会学的研究で記載された群集 ${ref('M1980')} ${ref('MO1990')} と環境省の植生調査の凡例 ${ref('MOE')} にある名称です。ただし各群集に挙げた種は、原記載の標徴種・識別種の表を転記したものではなく、作成時の知識から代表的な構成種を数種ずつ簡略化して選んだものです（${tag('独自')}）。分布する地方、植生帯、日本海側／太平洋側の割り当ても同様の概略です。群集名を確定する際は、地域の植生誌と原記載の総合常在度表で照合してください。</p>
+  </section>
+
+  <section class="panel"><h2>植生帯の推定</h2>
+    <p>植生帯の区分（亜熱帯・暖温帯常緑広葉樹林域・冷温帯落葉広葉樹林域・亜高山帯・高山帯）は、暖かさの指数による森林帯区分 ${ref('K1949')} と、日本の植物社会学的な植生区分 ${ref('M1980')} の考え方にもとづきます（${tag('確立')}）。都道府県ごとの境界標高は、典拠となる単一の表があるわけではなく、本アプリが設定した概略値です（${tag('独自')}）。地域の気温データ（暖かさの指数85℃・月と45℃・月の等値線など）や文献に合わせて、設定画面で調整してください。</p>
+  </section>
+
+  <section class="panel"><h2>遷移の予測</h2>
+    <h3>遷移段階 ${tag('慣行')}</h3>
+    <p>裸地 → 一年生草本 → 多年生草本 → ススキ・ササ草原 → 先駆性低木林 → 陽樹二次林 → 遷移後期林 → 極相林という段階は、二次遷移の一般的な記述 ${ref('C1916')} ${ref('FI2005')} にもとづく区分です。到達先の極相として、潜在自然植生 ${ref('Tx1956')} に相当する群集を参照DBから選びます。</p>
+    <h3>各段階の年数 ${tag('独自')}</h3>
+    <p>下の年数（早い／標準／遅い）は、日本の二次遷移について一般に言われる時間スケールをもとに本アプリが設定した目安で、特定の文献の数値ではありません。地域の調査記録（伐採年や放棄年が分かる林分の比較など）がある場合は、Excelの「遷移年数」シートを書き換えて読み込むと、その値で計算します。</p>
+    <div class="tablewrap"><table class="veg"><thead><tr><th class="sp">植生帯</th>${VEG.STAGES.slice(0, 7).map(s => `<th>${esc(s.short)}</th>`).join('')}</tr></thead><tbody>${years}</tbody></table></div>
+    <p class="small muted">値は「その段階に留まる年数」です。極相林は終点のため年数がありません。</p>
+    <h3>速さの補正 ${tag('独自')}</h3>
+    <p>補正の向きは、林床のササ類の密生が後継樹の定着を妨げること、シカの採食で林床植生と更新が衰退すること ${ref('YM2006')}、雑木林は管理をやめると常緑樹の侵入で遷移が進むこと ${ref('K1996')}、乾いた尾根ではアカマツ林などが持続しやすいこと ${ref('FI2005')} など、定性的な知見にもとづきます。係数の大きさ（×0.7、×1.8など）はそれを数値化した本アプリの目安です。</p>
+    <div class="tablewrap" style="max-height:none"><table class="plain"><tbody>
+      <tr><td>下層の極相構成種：合計被度2以上</td><td>×0.7</td></tr><tr><td>下層の極相構成種：侵入あり</td><td>×0.85</td></tr>
+      <tr><td>下層の極相構成種：なし（二次林以降）</td><td>×1.3</td></tr><tr><td>ササ類・クズ・コシダ等が低木層・草本層で被度4以上</td><td>×1.8</td></tr>
+      <tr><td>乾性・未熟土・尾根</td><td>×1.25</td></tr><tr><td>急傾斜（35°以上）</td><td>×1.15</td></tr><tr><td>シナリオ：シカ高密度</td><td>×1.6</td></tr>
+      <tr><td>補正の合計の上限</td><td>×3</td></tr></tbody></table></div>
+  </section>
+
+  <section class="panel"><h2>文献</h2>
+    <ol class="refs">${VEG.REFERENCES.map(r => `<li id="ref-${r.id}">${esc(r.text)}</li>`).join('')}</ol>
+    <p class="small muted">背景地図・標高・住所：国土地理院（地理院タイル、標高API、逆ジオコーダ）。地図表示：Leaflet。Excel入出力：SheetJS Community Edition。</p>
+  </section>`;
+};
+
 /* ===== app.js ===== */
 /* =========================================================
    植生野帳 — アプリ本体（画面・保存・入出力）
    ========================================================= */
 'use strict';
 (function () {
-  const VERSION = '1.0.0';
+  const VERSION = '1.1.0';
   const KEY = 'vegsurvey.v1';
   const $ = (s, el) => (el || document).querySelector(s);
   const $$ = (s, el) => Array.from((el || document).querySelectorAll(s));
@@ -1157,24 +1579,42 @@ VEG.sampleReleves = function () {
   const layerName = id => (VEG.LAYERS.find(l => l.id === id) || {}).name || id;
 
   /* ---------------- 保存 ---------------- */
+  function defaultConfig() { return { prefOverrides: {}, customSyntaxa: [], replaceDB: false, stageYears: null, weights: {} }; }
   function defaults() {
     return {
-      releves: [], features: [], recent: [],
+      projects: [], currentId: null, recent: [],
       settings: {
-        scale: 'bb7', theme: 'auto', observer: '', prefOverrides: {}, customSyntaxa: [], replaceDB: false,
+        scale: 'bb7', theme: 'auto', observer: '',
         table: { merge: false, method: 'bray', k: 2, manual: false, minFreq: 0.5, minPhi: 0.3, tab: 'sorted' }
       }
     };
   }
+  function makeProject(name, desc) {
+    return { id: 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), name: name || '新しいプロジェクト', desc: desc || '',
+      createdAt: Date.now(), updatedAt: Date.now(), releves: [], features: [], config: defaultConfig() };
+  }
+  function normalizeProject(p) {
+    p.releves = p.releves || []; p.features = p.features || [];
+    p.config = Object.assign(defaultConfig(), p.config || {});
+    return p;
+  }
   function load() {
     try {
       const j = JSON.parse(localStorage.getItem(KEY));
-      if (j && Array.isArray(j.releves)) {
+      if (j) {
         const d = defaults();
-        j.settings = Object.assign(d.settings, j.settings || {});
-        j.settings.table = Object.assign(d.settings.table, j.settings.table || {});
-        j.features = j.features || []; j.recent = j.recent || [];
-        return j;
+        const st = j.settings || {};
+        // 旧版（プロジェクトなし）からの移行
+        if (!j.projects && Array.isArray(j.releves)) {
+          const p = makeProject('既定のプロジェクト');
+          p.releves = j.releves; p.features = j.features || [];
+          p.config = Object.assign(defaultConfig(), { prefOverrides: st.prefOverrides || {}, customSyntaxa: st.customSyntaxa || [], replaceDB: !!st.replaceDB });
+          j.projects = [p]; j.currentId = null;
+        }
+        const out = { projects: (j.projects || []).map(normalizeProject), currentId: j.currentId || null, recent: j.recent || [], settings: Object.assign(d.settings, st) };
+        out.settings.table = Object.assign(d.settings.table, st.table || {});
+        ['prefOverrides', 'customSyntaxa', 'replaceDB'].forEach(k => delete out.settings[k]);
+        return out;
       }
     } catch (e) { /* 初回または破損 */ }
     return defaults();
@@ -1187,14 +1627,19 @@ VEG.sampleReleves = function () {
       try { localStorage.setItem(KEY, JSON.stringify(S)); }
       catch (e) { toast('端末に保存できませんでした。設定 → バックアップを書き出すで退避してください。'); }
     };
+    touchProject();
     if (now) run(); else saveTimer = setTimeout(run, 250);
   }
   window.addEventListener('pagehide', () => save(true));
 
-  const syntaxa = () => (S.settings.replaceDB && S.settings.customSyntaxa.length) ? S.settings.customSyntaxa : VEG.SYNTAXA.concat(S.settings.customSyntaxa || []);
+  const P = () => S.projects.find(p => p.id === S.currentId) || null;
+  const cfg = () => (P() ? P().config : defaultConfig());
+  function touchProject() { const p = P(); if (p) p.updatedAt = Date.now(); }
+
+  const syntaxa = () => { const c = cfg(); return (c.replaceDB && c.customSyntaxa.length) ? c.customSyntaxa : VEG.SYNTAXA.concat(c.customSyntaxa || []); };
   const scale = () => VEG.COVER_SCALES[S.settings.scale] || VEG.COVER_SCALES.bb7;
-  const included = () => S.releves.filter(r => r.include !== false);
-  const findR = id => S.releves.find(r => r.id === id);
+  const included = () => P().releves.filter(r => r.include !== false);
+  const findR = id => P().releves.find(r => r.id === id);
 
   function applyTheme() {
     const t = S.settings.theme;
@@ -1204,7 +1649,7 @@ VEG.sampleReleves = function () {
 
   function refreshSpeciesList() {
     const set = new Set(VEG.buildSpeciesList(syntaxa()));
-    S.releves.forEach(r => (r.records || []).forEach(x => set.add(x.sp)));
+    if (P()) P().releves.forEach(r => (r.records || []).forEach(x => set.add(x.sp)));
     $('#splist').innerHTML = Array.from(set).sort((a, b) => a.localeCompare(b, 'ja')).map(n => `<option value="${esc(n)}">`).join('');
   }
 
@@ -1241,7 +1686,7 @@ VEG.sampleReleves = function () {
     return `<div class="strata" title="階層ごとの植被率">${LAYER_IDS.map(L => `<i data-l="${L}" style="--w:${layerCov(r, L).toFixed(0)}%" title="${layerName(L)} ${layerCov(r, L).toFixed(0)}%"></i>`).join('')}</div>`;
   }
   function newCode() {
-    let n = 0; S.releves.forEach(r => { const m = /(\d+)$/.exec(r.code || ''); if (m) n = Math.max(n, +m[1]); });
+    let n = 0; (P() ? P().releves : []).forEach(r => { const m = /(\d+)$/.exec(r.code || ''); if (m) n = Math.max(n, +m[1]); });
     return 'R' + String(n + 1).padStart(3, '0');
   }
   function blankReleve(base) {
@@ -1256,51 +1701,219 @@ VEG.sampleReleves = function () {
     return r;
   }
   function topCommunity(r) {
-    const id = VEG.Analysis.identify(r, syntaxa(), S.settings);
+    const id = VEG.Analysis.identify(r, syntaxa(), cfg());
     const t = id.results[0];
     return t && t.score >= 0.2 ? { name: t.s.ja, score: t.score, s: t.s } : null;
   }
 
   /* ---------------- ルーティング ---------------- */
   function route() {
-    const h = (location.hash || '#list').slice(1);
-    const [name, arg] = h.split('/');
+    const h = (location.hash || '#home').slice(1);
+    let [name, arg] = h.split('/');
+    const needsProject = ['list', 'edit', 'table', 'analysis', 'map'];
+    if (needsProject.includes(name) && !P()) name = 'home';
     $$('.tabbar a').forEach(a => a.setAttribute('aria-current', (a.dataset.tab === name || (name === 'edit' && a.dataset.tab === 'list')) ? 'page' : 'false'));
     if (mapObj) { mapObj.remove(); mapObj = null; }
     view.onclick = null; view.onchange = null;
-    ({ list: renderList, edit: renderEdit, table: renderTable, analysis: renderAnalysis, map: renderMap, settings: renderSettings }[name] || renderList)(arg ? decodeURIComponent(arg) : null);
+    const pn = $('#projName');
+    if (pn) pn.textContent = P() ? P().name : 'プロジェクトを選択';
+    ({ home: renderHome, list: renderList, edit: renderEdit, table: renderTable, analysis: renderAnalysis, map: renderMap, settings: renderSettings, about: renderAbout }[name] || renderHome)(arg ? decodeURIComponent(arg) : null);
     window.scrollTo(0, 0);
   }
   window.addEventListener('hashchange', route);
 
+
+
+  /* ---------------- Excel ---------------- */
+  function needXLSX() {
+    if (VEG.Excel.available()) return true;
+    alert('Excel機能の部品がまだ端末に保存されていません。一度オンラインでアプリを開いてから、もう一度お試しください。');
+    return false;
+  }
+  function idRowsFor(rs) {
+    const rows = [['調査区番号', '順位', '群集名', '学名', '適合度(%)', '組成一致度(%)', '地理的整合係数', '一致した標徴種・優占種', '一致した識別種', '未確認の標徴種', '注意']];
+    rs.forEach(r => {
+      const id = VEG.Analysis.identify(r, syntaxa(), cfg());
+      if (!id.results.length) rows.push([r.code, '', '該当なし']);
+      id.results.slice(0, 3).forEach((x, i) => rows.push([r.code, i + 1, x.s.ja, x.s.la, Math.round(x.score * 100), Math.round(x.floristic * 100), +x.geo.toFixed(3), x.hitChar.join('、'), x.hitDiff.join('、'), x.miss.join('、'), x.flags.join('、')]));
+    });
+    return rows;
+  }
+  function sucRowsFor(rs) {
+    const yrs = [10, 30, 50, 100];
+    const rows = [['調査区番号', '植生帯', '現在の段階', '現在の群集', 'シナリオ'].concat(yrs.map(y => y + '年後（標準）'), ['極相候補', '補正係数', '補正の内容'])];
+    rs.forEach(r => {
+      const id = VEG.Analysis.identify(r, syntaxa(), cfg());
+      const pr = VEG.Succession.predict(r, id, syntaxa(), cfg(), 'none');
+      rows.push([r.code, VEG.ZONES[pr.ctx.zone].short, VEG.STAGES[pr.stage].name, pr.current ? pr.current.ja : '', VEG.Succession.SCENARIOS.none.name]
+        .concat(yrs.map(y => pr.at(y).typical.name), [pr.climax ? pr.climax.ja : '', +pr.factor.toFixed(2), pr.mods.map(m => m.label + ' ×' + (+m.mult.toFixed(2))).join('／')]));
+    });
+    return rows;
+  }
+  function stamp() { const d = new Date(); return d.toISOString().slice(0, 10) + '_' + String(d.getHours()).padStart(2, '0') + String(d.getMinutes()).padStart(2, '0'); }
+  function safeName(n) { return String(n).replace(/[\\/:*?"<>|]/g, '_').slice(0, 60); }
+  function exportProjectExcel() {
+    if (!needXLSX()) return;
+    const p = P(); const rs = p.releves.filter(r => r.include !== false);
+    let tables = {};
+    if (rs.length >= 2) {
+      const res = computeTable();
+      tables = { '素表': tableRows(res, 'raw'), '区分表': tableRows(res, 'sorted'), '常在度表': tableRows(res, 'synoptic') };
+    }
+    VEG.Excel.exportProject(p, { syntaxa: syntaxa(), tables, idRows: idRowsFor(p.releves), sucRows: sucRowsFor(p.releves), polyArea, filename: `${safeName(p.name)}_${stamp()}.xlsx` });
+    toast('Excelファイルを書き出しました');
+  }
+  function exportReleveExcel(r) {
+    if (!needXLSX()) return;
+    VEG.Excel.exportReleve(P(), r, { idRows: idRowsFor([r]), sucRows: sucRowsFor([r]), filename: `${safeName(P().name)}_${safeName(r.code)}_${stamp()}.xlsx` });
+    toast(`${r.code} をExcelに書き出しました`);
+  }
+  function importExcelFile(file, mode) {
+    if (!file || !needXLSX()) return;
+    file.arrayBuffer().then(buf => {
+      const d = VEG.Excel.importWorkbook(buf);
+      d.releves.forEach(r => {
+        const b = blankReleve();
+        Object.keys(b).forEach(k => { if (r[k] === undefined || (r[k] === '' && k === 'id')) r[k] = b[k]; });
+        LAYER_IDS.forEach(L => { r.layers[L] = r.layers[L] || { h: '', cov: '' }; });
+        if (!r.id) r.id = b.id;
+        r.updatedAt = Date.now();
+      });
+      let p;
+      if (mode === 'new') {
+        const name = prompt('新しいプロジェクトの名前', file.name.replace(/\.xlsx?$/i, '').replace(/_\d{4}-\d{2}-\d{2}_\d{4}$/, ''));
+        if (name == null) return;
+        p = makeProject(name.trim() || file.name);
+        p.releves = d.releves; p.features = d.features;
+        Object.assign(p.config, d.config);
+        S.projects.push(p); S.currentId = p.id;
+      } else {
+        p = P();
+        const byCode = new Map(p.releves.map(r => [r.code, r]));
+        const dup = d.releves.filter(r => byCode.has(r.code));
+        let overwrite = false;
+        if (dup.length) overwrite = confirm(`同じ調査区番号のデータが${dup.length}地点あります（${dup.slice(0, 5).map(r => r.code).join(', ')}${dup.length > 5 ? '…' : ''}）。\n［OK］Excelの内容で上書き　［キャンセル］その地点は読み込まない`);
+        d.releves.forEach(r => {
+          if (byCode.has(r.code)) { if (!overwrite) return; const old = byCode.get(r.code); r.id = old.id; p.releves[p.releves.indexOf(old)] = r; }
+          else p.releves.push(r);
+        });
+        p.features = p.features.concat(d.features);
+        if (d.config.customSyntaxa && d.config.customSyntaxa.length) p.config.customSyntaxa = d.config.customSyntaxa;
+        ['stageYears', 'prefOverrides', 'weights'].forEach(k => { if (d.config[k]) p.config[k] = d.config[k]; });
+      }
+      save(true); refreshSpeciesList();
+      const msg = `${d.releves.length}地点、${d.releves.reduce((a, r) => a + r.records.length, 0)}記録、植生区画${d.features.length}を読み込みました。`;
+      if (d.warnings.length) alert(msg + '\n\n確認が必要な点（' + d.warnings.length + '件）：\n・' + d.warnings.slice(0, 15).join('\n・') + (d.warnings.length > 15 ? '\n…ほか' : ''));
+      else toast(msg);
+      location.hash = '#list'; route();
+    }).catch(err => alert('Excelファイルを読み込めませんでした：' + err.message));
+  }
+  /* =========================================================
+     スタート画面（プロジェクト）
+     ========================================================= */
+  function renderHome() {
+    const ps = S.projects.slice().sort((a, b) => b.updatedAt - a.updatedAt);
+    const fmt = t => t ? new Date(t).toLocaleString('ja-JP', { year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+    view.innerHTML = `
+      <h1>プロジェクト</h1>
+      <p class="lead">調査地域や調査年ごとにプロジェクトを分けて管理します。開くと、そのプロジェクトの調査区・植生表・植生図だけが表示されます。</p>
+      <div class="row" style="margin-bottom:14px">
+        <button class="btn primary" id="hNew">新しいプロジェクト</button>
+        <label class="btn"><input type="file" id="hXlsx" accept=".xlsx,.xls" hidden>Excelから読み込む</label>
+        <button class="btn" id="hTpl">記入用Excelテンプレート</button>
+      </div>
+      ${ps.length ? `<ul class="rlist">${ps.map(p => {
+        const n = p.releves.length, nsp = new Set([].concat(...p.releves.map(r => (r.records || []).map(x => x.sp)))).size;
+        const draft = p.releves.filter(r => !r.savedAt).length;
+        return `<li class="pcard${p.id === S.currentId ? ' current' : ''}" data-id="${esc(p.id)}">
+          <div class="spread"><b class="pname">${esc(p.name)}</b>${p.id === S.currentId ? '<span class="badge">開いています</span>' : ''}</div>
+          ${p.desc ? `<div class="small">${esc(p.desc)}</div>` : ''}
+          <div class="meta">${n}地点、${nsp}種${draft ? `、下書き${draft}地点` : ''}<br>更新 ${esc(fmt(p.updatedAt))}</div>
+          <div class="acts">
+            <button class="btn sm primary" data-act="open">開く</button>
+            <button class="btn sm" data-act="xlsx">Excelに書き出す</button>
+            <button class="btn sm" data-act="rename">名前を変更</button>
+            <button class="btn sm danger" data-act="del">削除</button>
+          </div></li>`;
+      }).join('')}</ul>` : `<div class="empty panel"><p>プロジェクトがありません。新しく作るか、Excelファイルから読み込みます。</p><button class="btn" id="hSample">サンプルのプロジェクトで試す</button></div>`}
+      ${ps.length ? '<p style="margin-top:14px"><button class="btn sm ghost" id="hSample">サンプルのプロジェクトを追加</button></p>' : ''}`;
+    $('#hNew').onclick = () => {
+      const name = prompt('プロジェクト名（例：〇〇川流域 2026年度）', '');
+      if (name == null) return;
+      const p = makeProject(name.trim() || '新しいプロジェクト');
+      S.projects.push(p); S.currentId = p.id; save(true); toast(`「${p.name}」を作成しました`); location.hash = '#list';
+    };
+    $('#hSample').onclick = () => {
+      const p = makeProject('サンプル（房総丘陵・架空データ）', '操作を試すための架空の8地点');
+      p.releves = VEG.sampleReleves().map(r => Object.assign(r, { savedAt: Date.now() }));
+      S.projects.push(p); S.currentId = p.id; save(true); refreshSpeciesList(); toast('サンプルを読み込みました'); location.hash = '#list';
+    };
+    $('#hTpl').onclick = () => { if (!needXLSX()) return; VEG.Excel.exportTemplate(defaultConfig(), VEG.SYNTAXA); };
+    $('#hXlsx').onchange = e => importExcelFile(e.target.files[0], 'new');
+    const ul = $('.rlist');
+    if (ul) ul.onclick = e => {
+      const b = e.target.closest('[data-act]'); if (!b) return;
+      const p = S.projects.find(x => x.id === b.closest('.pcard').dataset.id);
+      const act = b.dataset.act;
+      if (act === 'open') { S.currentId = p.id; save(true); refreshSpeciesList(); location.hash = '#list'; }
+      if (act === 'xlsx') { const keep = S.currentId; S.currentId = p.id; exportProjectExcel(); S.currentId = keep; }
+      if (act === 'rename') {
+        const name = prompt('新しいプロジェクト名', p.name); if (name == null || !name.trim()) return;
+        const desc = prompt('説明（任意）', p.desc || ''); p.name = name.trim(); if (desc != null) p.desc = desc.trim();
+        save(true); renderHome(); route();
+      }
+      if (act === 'del') {
+        const n = p.releves.length;
+        if (!confirm(`プロジェクト「${p.name}」を削除します。\n調査区${n}地点と植生区画${p.features.length}区画がすべて消え、元に戻せません。\n\n先にExcelへ書き出しておくことをおすすめします。削除しますか？`)) return;
+        if (n > 0 && prompt(`確認のため、プロジェクト名「${p.name}」を入力してください`) !== p.name) { toast('名前が一致しないため削除を取り消しました'); return; }
+        S.projects = S.projects.filter(x => x !== p); if (S.currentId === p.id) S.currentId = null;
+        save(true); toast(`「${p.name}」を削除しました`); route();
+      }
+    };
+  }
+
+  function renderAbout() {
+    view.innerHTML = VEG.aboutHTML(cfg());
+    view.onclick = e => {
+      const a = e.target.closest('[data-ref]'); if (!a) return;
+      e.preventDefault();
+      const li = document.getElementById('ref-' + a.dataset.ref);
+      if (li) { li.scrollIntoView({ block: 'center' }); li.classList.add('hl'); setTimeout(() => li.classList.remove('hl'), 1800); }
+    };
+  }
   /* =========================================================
      調査区一覧
      ========================================================= */
   function renderList() {
-    const rs = S.releves;
+    const rs = P().releves;
     if (!rs.length) {
       view.innerHTML = `
         <h1>調査区</h1>
+        <p class="lead">プロジェクト「${esc(P().name)}」　<a href="#home">切り替える</a></p>
         <div class="empty panel">
-          <p>まだ調査区がありません。現地で「新しい調査区」を作成し、階層ごとに出現種と被度・群度を記録します。</p>
+          <p>まだ調査区がありません。現地で「新しい調査区」を作成し、階層ごとに出現種と被度・群度を記録します。Excelで記録したデータを読み込むこともできます。</p>
           <button class="btn primary" id="btnNew">新しい調査区</button>
-          <button class="btn" id="btnSample">サンプルデータで試す</button>
+          <label class="btn"><input type="file" id="btnXlsx" accept=".xlsx,.xls" hidden>Excelから読み込む</label>
         </div>
         ${guideHTML()}`;
       $('#btnNew').onclick = createNew;
-      $('#btnSample').onclick = () => { S.releves = S.releves.concat(VEG.sampleReleves()); save(true); refreshSpeciesList(); toast('サンプル8地点を読み込みました'); renderList(); };
+      $('#btnXlsx').onchange = e => importExcelFile(e.target.files[0], 'merge');
       return;
     }
     const inc = included().length;
     view.innerHTML = `
       <div class="spread"><h1>調査区</h1><button class="btn primary" id="btnNew">新しい調査区</button></div>
-      <p class="lead">${rs.length}地点（解析対象 ${inc}地点）。カード左の柱は上から高木・亜高木・低木・草本・コケ層の植被率です。</p>
+      <p class="lead">プロジェクト「${esc(P().name)}」　<a href="#home">切り替える</a><br>${rs.length}地点（解析対象 ${inc}地点${rs.some(r => !r.savedAt) ? '、下書き ' + rs.filter(r => !r.savedAt).length + '地点' : ''}）。カード左の柱は上から高木・亜高木・低木・草本・コケ層の植被率です。</p>
       <div class="row noprint" style="margin-bottom:12px">
         <input type="search" id="q" placeholder="地点名・番号・種名で絞り込み" style="flex:1;min-width:200px">
+        <button class="btn sm" id="btnXout">Excelに書き出す</button>
+        <label class="btn sm"><input type="file" id="btnXlsx" accept=".xlsx,.xls" hidden>Excelから追加</label>
       </div>
       <ul class="rlist" id="rlist"></ul>
       <details class="panel" style="margin-top:14px"><summary>調査方法の目安</summary>${guideHTML(true)}</details>`;
     $('#btnNew').onclick = createNew;
+    $('#btnXout').onclick = exportProjectExcel;
+    $('#btnXlsx').onchange = e => importExcelFile(e.target.files[0], 'merge');
     const draw = () => {
       const q = $('#q').value.trim();
       const list = rs.filter(r => !q || [r.code, r.site, r.pref].concat((r.records || []).map(x => x.sp)).some(v => String(v || '').includes(q)))
@@ -1311,7 +1924,7 @@ VEG.sampleReleves = function () {
         return `<li class="rcard${r.include === false ? ' excluded' : ''}" data-id="${esc(r.id)}">
           ${strataHTML(r)}
           <div>
-            <div class="spread"><span class="code">${esc(r.code)}</span><span class="meta">${esc(r.date)}</span></div>
+            <div class="spread"><span class="code">${esc(r.code)} ${r.savedAt ? '<span class="badge saved">保存済み</span>' : '<span class="badge draft">下書き</span>'}</span><span class="meta">${esc(r.date)}</span></div>
             <div>${esc(r.site || '（地点名なし）')}</div>
             <div class="meta">${esc(r.pref || '都道府県未設定')}${r.elev !== '' ? '、標高' + esc(r.elev) + 'm' : ''}、${nsp}種${r.area ? '、' + esc(r.area) + 'm²' : ''}</div>
             <div class="comm">${c ? '推定：' + esc(c.name) : '<span class="muted">推定群集なし</span>'}</div>
@@ -1320,6 +1933,7 @@ VEG.sampleReleves = function () {
               <a class="btn sm" href="#analysis/${encodeURIComponent(r.id)}">判定・遷移</a>
               <button class="btn sm" data-act="clone">条件を引き継いで新規</button>
               <label class="btn sm ghost"><input type="checkbox" data-act="inc" ${r.include !== false ? 'checked' : ''}> 解析に含める</label>
+              <button class="btn sm danger" data-act="del">削除</button>
             </div>
           </div></li>`;
       }).join('') || '<li class="muted">該当する調査区はありません。</li>';
@@ -1329,14 +1943,22 @@ VEG.sampleReleves = function () {
     $('#rlist').onclick = e => {
       const li = e.target.closest('.rcard'); if (!li) return;
       const r = findR(li.dataset.id);
-      if (e.target.dataset.act === 'clone') { const n = blankReleve(r); S.releves.push(n); save(true); location.hash = '#edit/' + n.id; }
+      if (e.target.dataset.act === 'clone') { const n = blankReleve(r); P().releves.push(n); save(true); location.hash = '#edit/' + n.id; }
+      if (e.target.dataset.act === 'del' && confirmDeleteReleve(r)) { save(true); renderList(); }
     };
     $('#rlist').onchange = e => {
       if (e.target.dataset.act !== 'inc') return;
       const r = findR(e.target.closest('.rcard').dataset.id); r.include = e.target.checked; save(); draw();
     };
   }
-  function createNew() { const r = blankReleve(); S.releves.push(r); save(true); location.hash = '#edit/' + r.id; }
+  function confirmDeleteReleve(r) {
+    const n = new Set((r.records || []).map(x => x.sp)).size;
+    if (!confirm(`調査区 ${r.code}${r.site ? '（' + r.site + '）' : ''} を削除します。\n出現種${n}種・${(r.records || []).length}記録と環境情報がすべて消え、元に戻せません。\n削除しますか？`)) return false;
+    P().releves = P().releves.filter(x => x !== r);
+    toast(`調査区 ${r.code} を削除しました`);
+    return true;
+  }
+  function createNew() { const r = blankReleve(); P().releves.push(r); save(true); location.hash = '#edit/' + r.id; }
 
   function guideHTML(inner) {
     const g = VEG.PLOT_GUIDE.map(p => `<tr><td>${esc(p.name)}</td><td>${p.min}〜${p.max} m²</td><td>${esc(p.note)}</td></tr>`).join('');
@@ -1368,7 +1990,13 @@ VEG.sampleReleves = function () {
     view.innerHTML = `
       <div class="spread"><h1>調査区 ${esc(r.code)}</h1>
         <div class="row"><a class="btn sm" href="#analysis/${encodeURIComponent(r.id)}">判定・遷移を見る</a><a class="btn sm" href="#list">一覧へ</a></div></div>
-      <p class="lead">入力内容はその場で端末に保存されます。</p>
+      <section class="savebar panel">
+        <div><b id="saveState"></b><div class="small muted" id="saveSub"></div></div>
+        <div class="row">
+          <button class="btn primary" id="btnSave">この調査を保存</button>
+          <button class="btn sm" id="btnSaveX">Excelに書き出す</button>
+        </div>
+      </section>
       <div class="twocol">
       <div>
         <section class="panel">
@@ -1449,7 +2077,24 @@ VEG.sampleReleves = function () {
         <div class="chips recent" id="recent"></div>
       </section>`;
 
-    const touch = () => { r.updatedAt = Date.now(); save(); };
+    const touch = () => { r.updatedAt = Date.now(); save(); saveState(); };
+    function saveState() {
+      const dirty = !r.savedAt || r.updatedAt > r.savedAt;
+      const t = x => new Date(x).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      $('#saveState').textContent = !r.savedAt ? '下書き（未保存）' : dirty ? '保存後に変更あり' : '保存済み';
+      $('#saveState').className = dirty ? 'st-draft' : 'st-saved';
+      $('#saveSub').textContent = (r.savedAt ? '最終保存 ' + t(r.savedAt) + '。' : '') + '入力中の内容も下書きとして端末に自動で残ります。';
+    }
+    $('#btnSave').onclick = () => {
+      if (!r.code.trim()) { toast('調査区番号を入れてください'); $('[data-f=code]').focus(); return; }
+      if (P().releves.some(x => x !== r && x.code === r.code)) { toast(`調査区番号 ${r.code} は既に使われています`); $('[data-f=code]').focus(); return; }
+      const miss = [];
+      if (!r.date) miss.push('調査日'); if (!r.pref) miss.push('都道府県'); if (!r.area) miss.push('面積'); if (!r.records.length) miss.push('出現種');
+      if (miss.length && !confirm(`次の項目が未入力です：${miss.join('、')}\nこのまま保存しますか？`)) return;
+      r.savedAt = Date.now(); r.updatedAt = r.savedAt; save(true); saveState();
+      toast(`調査区 ${r.code} を保存しました`);
+    };
+    $('#btnSaveX').onclick = () => exportReleveExcel(r);
     view.addEventListener('input', onInput);
     view.addEventListener('change', onInput);
     function onInput(e) {
@@ -1474,7 +2119,7 @@ VEG.sampleReleves = function () {
     window.addEventListener('hashchange', off);
 
     function zoneInfo() {
-      const ctx = VEG.Analysis.contextOf(r, S.settings);
+      const ctx = VEG.Analysis.contextOf(r, cfg());
       $('#zoneInfo').textContent = ctx.zone ? `推定植生帯：${VEG.ZONES[ctx.zone].name}（${ctx.region}、${ctx.sea === 'J' ? '日本海側' : '太平洋側'}型の目安）` : '都道府県と標高を入れると植生帯を推定します。';
     }
     function areaMsg() {
@@ -1505,12 +2150,12 @@ VEG.sampleReleves = function () {
     function cand() {
       const box = $('#cand');
       if (!r.pref) { box.innerHTML = '<p class="muted small">都道府県を選ぶと、植生帯と地方に合う群集の候補を表示します。種名をタップすると入力欄に入ります。</p>'; return; }
-      const list = VEG.Analysis.candidatesFor(r.pref, r.elev, syntaxa(), S.settings);
+      const list = VEG.Analysis.candidatesFor(r.pref, r.elev, syntaxa(), cfg());
       box.innerHTML = list.map(({ s, seaMatch }) => `<div class="cand"><b>${esc(s.ja)}</b> <span class="badge">${esc(VEG.STAGES[s.stage].short)}</span>${seaMatch ? '' : '<span class="flag">' + (s.sea === 'J' ? '日本海側型' : '太平洋側型') + '</span>'}
         <div class="chips" style="margin-top:6px">${s.char.map(n => `<button class="chip char" data-sp="${esc(n)}">${esc(n)}</button>`).join('')}${s.diff.map(n => `<button class="chip" data-sp="${esc(n)}">${esc(n)}</button>`).join('')}</div></div>`).join('') || '<p class="muted">該当する群集が参照DBにありません。</p>';
     }
     function idPreview() {
-      const res = VEG.Analysis.identify(r, syntaxa(), S.settings);
+      const res = VEG.Analysis.identify(r, syntaxa(), cfg());
       const box = $('#idPreview');
       if (!res.results.length) { box.innerHTML = '<p class="muted small">種を記録すると、参照DBとの照合結果がここに出ます。</p>'; return; }
       box.innerHTML = res.results.slice(0, 3).map((x, i) => `<div class="cand${i === 0 ? ' top' : ''}"><div class="spread"><b>${esc(x.s.ja)}</b><span>${Math.round(x.score * 100)}%</span></div>
@@ -1542,12 +2187,13 @@ VEG.sampleReleves = function () {
       const chip = e.target.closest('[data-sp]');
       if (chip) { $('#spIn').value = chip.dataset.sp; $('#spIn').focus(); return; }
       const del = e.target.closest('[data-del]');
-      if (del) { const i = +del.dataset.del; const x = r.records[i]; r.records.splice(i, 1); touch(); spList(); idPreview(); toast(`${x.sp}を削除しました`); }
+      if (del) {
+        const i = +del.dataset.del; const x = r.records[i];
+        if (!confirm(`${x.sp}（${layerName(x.layer)} ${x.cover}・${x.soc}）を出現種から削除しますか？`)) return;
+        r.records.splice(i, 1); touch(); spList(); idPreview(); toast(`${x.sp}を削除しました`);
+      }
     };
-    $('#btnDel').onclick = () => {
-      if (!confirm(`調査区 ${r.code} を削除します。元に戻せません。`)) return;
-      S.releves = S.releves.filter(x => x !== r); save(true); location.hash = '#list';
-    };
+    $('#btnDel').onclick = () => { if (confirmDeleteReleve(r)) { save(true); location.hash = '#list'; } };
     $('#btnGPS').onclick = () => {
       if (!navigator.geolocation) { $('#gpsMsg').textContent = 'この端末は位置情報に対応していません。'; return; }
       $('#gpsMsg').textContent = '測位中…';
@@ -1573,7 +2219,7 @@ VEG.sampleReleves = function () {
         touch(); zoneInfo(); cand(); idPreview();
       } catch (err) { $('#gpsMsg').textContent = '取得に失敗しました。通信状況を確認してください。'; }
     };
-    zoneInfo(); areaMsg(); spList(); cand(); idPreview(); recent();
+    zoneInfo(); areaMsg(); spList(); cand(); idPreview(); recent(); saveState();
   }
 
   /* =========================================================
@@ -1707,7 +2353,7 @@ VEG.sampleReleves = function () {
     const rows = [];
     for (let g = 0; g < res.diff.G; g++) {
       const syn = groupSynthetic(res, g);
-      const id = VEG.Analysis.identify(syn, syntaxa(), S.settings);
+      const id = VEG.Analysis.identify(syn, syntaxa(), cfg());
       const t = id.results[0];
       const codes = res.releves.filter((_, i) => res.groups[i] === g).map(r => r.code).join(', ');
       rows.push(`<div class="cand"><div class="spread"><span><span class="gl" style="--gc:${gColor(g)};color:#fff;background:var(--gc);border-radius:4px;padding:0 6px;font-weight:800">${VEG.Analysis.groupLabel(g)}</span> ${t ? '<b>' + esc(t.s.ja) + '</b> <span class="small muted">' + esc(t.s.la) + '</span>' : '<span class="muted">該当なし</span>'}</span>${t ? `<span>${Math.round(t.score * 100)}%</span>` : ''}</div>
@@ -1772,12 +2418,12 @@ VEG.sampleReleves = function () {
      ========================================================= */
   const anaState = { scenario: 'none', years: 30 };
   function renderAnalysis(id) {
-    const rs = S.releves;
+    const rs = P().releves;
     if (!rs.length) { view.innerHTML = `<h1>判定・遷移</h1><div class="empty panel"><p>調査区を記録すると、群集の判定と遷移の予測ができます。</p><a class="btn primary" href="#list">調査区へ</a></div>${regionBrowserHTML()}`; bindRegionBrowser(); return; }
     const r = findR(id) || rs[0];
     view.innerHTML = `
       <h1>判定・遷移</h1>
-      <p class="lead">都道府県・標高から植生帯と地方を決め、その範囲の群集を参照DBと照合します。遷移は植生帯ごとの標準的な年数をもとに、立地と下層の後継樹から速さを補正します。</p>
+      <p class="lead">都道府県・標高から植生帯と地方を決め、その範囲の群集を参照DBと照合します。遷移は植生帯ごとの標準的な年数をもとに、立地と下層の後継樹から速さを補正します。各結果の「算出の内訳」と<a href="#about">根拠と出典</a>で計算の中身を確認できます。</p>
       <label class="f" style="max-width:420px;margin-bottom:12px"><span>調査区</span><select id="aSel">${rs.map(x => `<option value="${esc(x.id)}"${x === r ? ' selected' : ''}>${esc(x.code)}　${esc(x.site || '')}</option>`).join('')}</select></label>
       <div class="twocol"><div>
         <section class="panel" id="ctxPanel"></section>
@@ -1797,7 +2443,7 @@ VEG.sampleReleves = function () {
     $('#yrs').oninput = e => { anaState.years = +e.target.value; $('#yv').textContent = anaState.years; drawSuc(true); };
     let idRes = null, pred = null;
     function drawCtx() {
-      const ctx = VEG.Analysis.contextOf(r, S.settings);
+      const ctx = VEG.Analysis.contextOf(r, cfg());
       $('#ctxPanel').innerHTML = `<h2>立地と植生帯</h2>
         <dl class="kv"><dt>地点</dt><dd>${esc(r.pref || '未設定')}　${esc(r.site || '')}</dd><dt>標高・傾斜</dt><dd>${esc(r.elev || '-')} m、${esc(r.slope || '-')}°、${esc(r.aspect || '-')}</dd>
         <dt>微地形・土壌</dt><dd>${esc(r.topo || '-')}、${esc(r.soil || '-')}、${esc(r.moist || '-')}</dd><dt>人為的影響</dt><dd>${esc(r.impact || '-')}${r.yearsSince ? '（' + esc(r.yearsSince) + '年経過）' : ''}</dd></dl>
@@ -1810,18 +2456,19 @@ VEG.sampleReleves = function () {
       $('#sOv').onchange = e => { r.seaOverride = e.target.value; save(); drawAll(); };
     }
     function drawId() {
-      idRes = VEG.Analysis.identify(r, syntaxa(), S.settings);
+      idRes = VEG.Analysis.identify(r, syntaxa(), cfg());
       if (!idRes.results.length) { $('#idBox').innerHTML = '<p class="muted">参照DBの群集と共通する種がありません。種名の表記（カタカナ和名）を確認してください。</p>'; return; }
       $('#idBox').innerHTML = idRes.results.map((x, i) => `<div class="cand${i === 0 ? ' top' : ''}">
         <div class="spread"><span><b>${esc(x.s.ja)}</b> <span class="badge">${esc(VEG.STAGES[x.s.stage].short)}</span>${x.flags.map(f => `<span class="flag">${esc(f)}</span>`).join('')}</span><b>${Math.round(x.score * 100)}%</b></div>
         <div class="small muted"><i>${esc(x.s.la)}</i>　${esc(x.s.cls)}</div>
         <div class="bar"><i style="width:${Math.round(x.score * 100)}%"></i></div>
         <div class="chips">${x.s.char.map(n => `<span class="chip ${x.hitChar.includes(n) ? 'hit' : 'miss'}" title="標徴種・優占種">${esc(n)}</span>`).join('')}${x.hitDiff.map(n => `<span class="chip char" title="識別種">${esc(n)}</span>`).join('')}</div>
-        <p class="small" style="margin-top:6px">${esc(x.s.note)}</p></div>`).join('') +
-        `<p class="small muted">組成の一致度 × 地理的整合（植生帯・地方・日本海側／太平洋側）で順位付けしています。塗りつぶしは確認済み、取り消し線は未確認の標徴種です。参照DBは代表種による簡易版のため、確定には地域の植生誌・原記載と照合してください。</p>`;
+        <p class="small" style="margin-top:6px">${esc(x.s.note)}</p>
+        ${breakdownHTML(x)}</div>`).join('') +
+        `<p class="small muted">適合度は本アプリ独自の目安で、確率ではありません。塗りつぶしは確認済み、取り消し線は未確認の標徴種です。<a href="#about">算出方法と根拠</a></p>`;
     }
     function drawSuc(onlyYear) {
-      if (!onlyYear || !pred) pred = VEG.Succession.predict(r, idRes, syntaxa(), S.settings, anaState.scenario);
+      if (!onlyYear || !pred) pred = VEG.Succession.predict(r, idRes, syntaxa(), cfg(), anaState.scenario);
       const at = pred.at(anaState.years);
       const rng = (at.early.name !== at.late.name) ? `<p class="small">幅：早ければ「${esc(at.early.name)}」、遅ければ「${esc(at.late.name)}」</p>` : '';
       $('#sucBox').innerHTML = `
@@ -1830,13 +2477,33 @@ VEG.sampleReleves = function () {
         <div class="timeline">${timelineSVG(pred, anaState.years)}</div>
         ${pred.notes.map(n => `<p class="note">${esc(n)}</p>`).join('')}
         ${pred.climaxRank.length ? `<h3>到達しうる極相（潜在自然植生）の候補</h3>${pred.climaxRank.map((c, i) => `<div class="cand"><b>${i + 1}. ${esc(c.s.ja)}</b><div class="small muted">${esc(c.why.join('／') || '植生帯・地方から')}</div></div>`).join('')}` : ''}
-        <p class="small muted">年数は日本の二次遷移に関する一般的な知見にもとづく目安で、種子供給源・シカ密度・気象害などで大きく変わります。</p>`;
+        <details class="why"><summary>算出の内訳</summary>
+          <p class="small">現在の段階：${pred.current ? `参照DBでの判定（${esc(pred.current.ja)}、段階${pred.current.stage}）` : '判定の適合度が30%未満のため階層構造から推定'}。階層構造からの推定は「${esc(VEG.STAGES[pred.structuralStage].name)}」です（高木・亜高木層の植被率30%以上で林分、低木層30%以上で低木林、など）。</p>
+          <table class="plain"><thead><tr><th>補正</th><th>係数</th></tr></thead><tbody>
+            ${pred.mods.length ? pred.mods.map(m => `<tr><td>${esc(m.label)}</td><td>×${(+m.mult.toFixed(2))}</td></tr>`).join('') : '<tr><td>補正なし</td><td>×1</td></tr>'}
+            <tr><th>合計（各段階の年数に掛ける）</th><th>×${(+pred.factor.toFixed(2))}</th></tr></tbody></table>
+          <p class="small" style="margin-top:8px">使用した年数（${esc(VEG.ZONES[pred.ctx.zone].short)}、補正前、早い／標準／遅い）</p>
+          <table class="plain"><tbody>${VEG.STAGES.slice(0, 7).map((st, i) => `<tr><td>${esc(st.name)}</td><td>${pred.yearsTable[i].join('／')} 年</td></tr>`).join('')}</tbody></table>
+          ${r.yearsSince ? `<p class="small" style="margin-top:6px">攪乱後の年数（${esc(r.yearsSince)}年）は、現在の段階に入ってからの年数が不明なため半分を経過済みとして差し引いています。</p>` : ''}
+        </details>
+        <p class="small muted">段階の区分は二次遷移の一般的な記述にもとづきますが、年数と補正係数は本アプリの目安です。<a href="#about">根拠と出典</a></p>`;
     }
     function drawAll() { drawCtx(); drawId(); drawSuc(); }
     drawAll();
     bindRegionBrowser();
   }
 
+  function breakdownHTML(x) {
+    const pct = v => (v * 100).toFixed(1) + '%';
+    const rows = x.parts.map(p => `<tr class="${p.present ? '' : 'absent'}"><td>${esc(p.sp)}</td><td>${esc(p.role.replace('標徴種・優占種', '標徴・優占'))}</td><td>${p.w}</td><td>${p.present ? esc(p.cover) : '—'}</td><td>${p.present ? p.factor.toFixed(2) : '0'}</td><td>${p.contrib.toFixed(2)}</td></tr>`).join('');
+    return `<details class="why"><summary>算出の内訳</summary>
+      <table class="plain"><thead><tr><th>種</th><th>役割</th><th>重み</th><th>被度</th><th>被度係数</th><th>寄与</th></tr></thead><tbody>${rows}
+      <tr><th colspan="5">合計 ÷ 最大値</th><th>${x.got.toFixed(2)} ÷ ${x.max.toFixed(2)} ＝ ${pct(x.raw)}</th></tr></tbody></table>
+      <p class="small" style="margin-top:6px">${x.domHit ? `最上層の優占種（${esc(x.dominant)}）が一致：＋${x.weights.domBonus} → ` : ''}組成一致度 ${pct(x.floristic)}</p>
+      <table class="plain"><tbody>${x.geoParts.map(g => `<tr><td>${esc(g.label)}</td><td>×${g.mult}</td></tr>`).join('')}
+      <tr><th>地理的整合係数</th><th>×${(+x.geo.toFixed(3))}</th></tr></tbody></table>
+      <p class="small" style="margin-top:6px"><b>適合度 ＝ ${pct(x.floristic)} × ${(+x.geo.toFixed(3))} ＝ ${pct(x.score)}</b></p></details>`;
+  }
   function timelineSVG(pred, year) {
     const path = pred.path;
     const lastStart = path.length ? path[path.length - 1].start[2] : 0;
@@ -1871,8 +2538,8 @@ VEG.sampleReleves = function () {
   function bindRegionBrowser() {
     const draw = () => {
       const pref = $('#rbPref').value, elev = $('#rbElev').value;
-      const z = VEG.zoneOf(pref, elev, S.settings.prefOverrides);
-      const list = VEG.Analysis.candidatesFor(pref, elev, syntaxa(), S.settings);
+      const z = VEG.zoneOf(pref, elev, cfg().prefOverrides);
+      const list = VEG.Analysis.candidatesFor(pref, elev, syntaxa(), cfg());
       $('#rbOut').innerHTML = `<p class="small" style="margin-top:8px">${esc(VEG.ZONES[z].name)}</p>` + list.map(({ s, seaMatch }) => `<div class="cand"><b>${esc(s.ja)}</b> <span class="badge">${esc(VEG.STAGES[s.stage].short)}</span>${seaMatch ? '' : '<span class="flag">' + (s.sea === 'J' ? '日本海側型' : '太平洋側型') + '</span>'}
         <div class="small muted"><i>${esc(s.la)}</i></div><div class="small">標徴種・優占種：${esc(s.char.join('、'))}／識別種：${esc(s.diff.join('、') || '-')}</div></div>`).join('');
     };
@@ -1889,8 +2556,8 @@ VEG.sampleReleves = function () {
   // 群落名 → 色：現在の調査区と区画に出てくる群落名を五十音順に並べ、順に色を割り当てる（同じデータなら毎回同じ色）
   let colorReg = null;
   function buildColorReg() {
-    const names = new Set(S.features.map(f => f.properties.community));
-    S.releves.forEach(r => { const c = topCommunity(r); if (c) names.add(c.name); });
+    const names = new Set(P().features.map(f => f.properties.community));
+    P().releves.forEach(r => { const c = topCommunity(r); if (c) names.add(c.name); });
     colorReg = new Map(Array.from(names).sort((a, b) => a.localeCompare(b, 'ja')).map((n, i) => [n, PALETTE[i % PALETTE.length]]));
   }
   function colorForName(name) {
@@ -1912,7 +2579,7 @@ VEG.sampleReleves = function () {
   function renderMap() {
     if (mapObj) { mapObj.off(); mapObj.remove(); mapObj = null; }
     mapState.temp = null; colorReg = null;
-    const pts = S.releves.filter(r => r.lat !== '' && r.lng !== '' && !isNaN(+r.lat) && !isNaN(+r.lng));
+    const pts = P().releves.filter(r => r.lat !== '' && r.lng !== '' && !isNaN(+r.lat) && !isNaN(+r.lng));
     if (mapState.color === 'group' && !lastTable && included().length >= 2) computeTable();
     view.innerHTML = `
       <h1>植生図</h1>
@@ -1928,7 +2595,7 @@ VEG.sampleReleves = function () {
       </section>
       <div id="map" role="region" aria-label="地図"></div>
       <div class="legend" id="legend"></div>
-      <section class="panel" style="margin-top:14px"><h2>植生区画 <span class="small muted">${S.features.length}区画</span></h2><div id="fList"></div></section>`;
+      <section class="panel" style="margin-top:14px"><h2>植生区画 <span class="small muted">${P().features.length}区画</span></h2><div id="fList"></div></section>`;
     $('#mColor').onchange = e => { mapState.color = e.target.value; renderMap(); };
     $('#mGeo').onclick = exportGeoJSON;
     $('#mImp').onchange = importGeoJSON;
@@ -1952,11 +2619,11 @@ VEG.sampleReleves = function () {
 
     // 先に表示範囲を決めてから図形を追加する（Leafletの初期化順序の制約）
     const ll = pts.map(r => [+r.lat, +r.lng]);
-    S.features.forEach(f => ((f.geometry && f.geometry.coordinates && f.geometry.coordinates[0]) || []).forEach(c => ll.push([c[1], c[0]])));
+    P().features.forEach(f => ((f.geometry && f.geometry.coordinates && f.geometry.coordinates[0]) || []).forEach(c => ll.push([c[1], c[0]])));
     if (ll.length) mapObj.fitBounds(L.latLngBounds(ll).pad(0.3), { maxZoom: 16, animate: false });
     else mapObj.setView([36.2, 138.3], 5);
     const legend = new Map();
-    S.features.forEach((f, i) => {
+    P().features.forEach((f, i) => {
       const col = colorForName(f.properties.community);
       legend.set(f.properties.community, col);
       L.geoJSON(f, { interactive: !mapState.drawing, style: { color: col, weight: 2, fillColor: col, fillOpacity: 0.35 } })
@@ -1977,7 +2644,7 @@ VEG.sampleReleves = function () {
 
   function setupDrawing(L) {
     const box = $('#drawBox');
-    const comms = Array.from(new Set(S.releves.map(r => (topCommunity(r) || {}).name).filter(Boolean).concat(syntaxa().map(s => s.ja))));
+    const comms = Array.from(new Set(P().releves.map(r => (topCommunity(r) || {}).name).filter(Boolean).concat(syntaxa().map(s => s.ja))));
     box.innerHTML = `<p class="small" style="margin-top:10px">地図をタップして頂点を置き、3点以上で「区画を保存」。</p>
       <div class="grid2"><label class="f"><span>群落名</span><input type="text" id="dName" list="commList" placeholder="例：ヤブコウジ－スダジイ群集"></label>
       <label class="f"><span>メモ</span><input type="text" id="dNote" placeholder="判読根拠など"></label></div>
@@ -1995,15 +2662,15 @@ VEG.sampleReleves = function () {
       if (mapState.pts.length < 3) { toast('3点以上を置いてください'); return; }
       if (!name) { toast('群落名を入れてください'); $('#dName').focus(); return; }
       const ring = mapState.pts.map(p => [+p[1].toFixed(6), +p[0].toFixed(6)]); ring.push(ring[0]);
-      S.features.push({ type: 'Feature', properties: { community: name, note: $('#dNote').value.trim(), color: colorForName(name), created: today() }, geometry: { type: 'Polygon', coordinates: [ring] } });
+      P().features.push({ type: 'Feature', properties: { community: name, note: $('#dNote').value.trim(), color: colorForName(name), created: today() }, geometry: { type: 'Polygon', coordinates: [ring] } });
       save(true); mapState.pts = []; toast('区画を保存しました'); renderMap();
     };
   }
   function drawFeatureList() {
-    $('#fList').innerHTML = S.features.length ? `<table class="plain"><thead><tr><th>群落</th><th>面積（概算）</th><th></th></tr></thead><tbody>${S.features.map((f, i) =>
+    $('#fList').innerHTML = P().features.length ? `<table class="plain"><thead><tr><th>群落</th><th>面積（概算）</th><th></th></tr></thead><tbody>${P().features.map((f, i) =>
       `<tr><td><i style="display:inline-block;width:12px;height:12px;border-radius:2px;background:${colorForName(f.properties.community)}"></i> ${esc(f.properties.community)}</td><td>${polyArea(f).toFixed(2)} ha</td><td><button class="btn sm danger" data-fdel="${i}">削除</button></td></tr>`).join('')}</tbody></table>`
       : '<p class="muted small">まだ区画はありません。「植生区画を描く」で、同じ群落が広がる範囲を地図上に描けます。</p>';
-    $('#fList').onclick = e => { const b = e.target.closest('[data-fdel]'); if (!b) return; if (!confirm('この区画を削除しますか？')) return; S.features.splice(+b.dataset.fdel, 1); save(true); renderMap(); };
+    $('#fList').onclick = e => { const b = e.target.closest('[data-fdel]'); if (!b) return; if (!confirm('この区画を削除しますか？')) return; P().features.splice(+b.dataset.fdel, 1); save(true); renderMap(); };
   }
   function polyArea(f) {
     const ring = f.geometry && f.geometry.coordinates && f.geometry.coordinates[0]; if (!ring) return 0;
@@ -2026,20 +2693,20 @@ VEG.sampleReleves = function () {
     void pad;
   }
   function exportGeoJSON() {
-    const feats = S.releves.filter(r => r.lat !== '' && r.lng !== '').map(r => {
+    const feats = P().releves.filter(r => r.lat !== '' && r.lng !== '').map(r => {
       const c = topCommunity(r);
       const gi = lastTable ? lastTable.releves.indexOf(r) : -1;
       return { type: 'Feature', geometry: { type: 'Point', coordinates: [+r.lng, +r.lat] },
         properties: { kind: 'releve', code: r.code, site: r.site, date: r.date, pref: r.pref, elev: r.elev, area_m2: r.area, community: c ? c.name : '', score: c ? +c.score.toFixed(3) : null, group: gi >= 0 ? VEG.Analysis.groupLabel(lastTable.groups[gi]) : '', n_species: new Set((r.records || []).map(x => x.sp)).size } };
     });
-    const polys = S.features.map(f => Object.assign({}, f, { properties: Object.assign({ kind: 'vegetation_unit' }, f.properties) }));
+    const polys = P().features.map(f => Object.assign({}, f, { properties: Object.assign({ kind: 'vegetation_unit' }, f.properties) }));
     download(`vegetation_map_${today()}.geojson`, JSON.stringify({ type: 'FeatureCollection', features: feats.concat(polys) }, null, 1), 'application/geo+json');
   }
   function importGeoJSON(e) {
     const file = e.target.files[0]; if (!file) return;
     file.text().then(t => {
       const j = JSON.parse(t); let n = 0;
-      (j.features || []).forEach(f => { if (f.geometry && f.geometry.type === 'Polygon') { f.properties = f.properties || {}; f.properties.community = f.properties.community || f.properties.name || '名称なし'; S.features.push(f); n++; } });
+      (j.features || []).forEach(f => { if (f.geometry && f.geometry.type === 'Polygon') { f.properties = f.properties || {}; f.properties.community = f.properties.community || f.properties.name || '名称なし'; P().features.push(f); n++; } });
       save(true); toast(`${n}区画を読み込みました`); renderMap();
     }).catch(() => toast('GeoJSONを読み込めませんでした。ファイル形式を確認してください。'));
   }
@@ -2048,102 +2715,123 @@ VEG.sampleReleves = function () {
      設定
      ========================================================= */
   function renderSettings() {
-    const st = S.settings;
+    const st = S.settings, p = P(), c = cfg();
     let bytes = 0; try { bytes = (localStorage.getItem(KEY) || '').length * 2; } catch (e) { /* noop */ }
+    const W = Object.assign({}, VEG.Analysis.DEFAULT_WEIGHTS, c.weights || {});
+    const wLab = { char: '標徴種・優占種の重み', diff: '識別種の重み', comp: '随伴種の重み', domBonus: '優占種一致の加点', adjZone: '隣接植生帯の係数', wrongZone: '植生帯不一致の係数', outRegion: '分布域外の地方の係数', seaMismatch: '日本海側／太平洋側不一致の係数' };
     view.innerHTML = `
       <h1>設定</h1>
-      <section class="panel"><h2>記録</h2><div class="grid2">
+      <p class="lead"><a href="#about">計算の根拠と出典</a>を確認できます。</p>
+      <section class="panel"><h2>記録と表示</h2><div class="grid2">
         <label class="f"><span>被度の階級</span><select id="sScale">${Object.entries(VEG.COVER_SCALES).map(([k, v]) => `<option value="${k}"${st.scale === k ? ' selected' : ''}>${esc(v.name)}</option>`).join('')}</select></label>
         <label class="f"><span>既定の調査者名</span><input type="text" id="sObs" value="${esc(st.observer)}"></label>
         <label class="f"><span>表示</span><select id="sTheme">${[['auto', '端末の設定に合わせる'], ['light', 'ライト'], ['dark', 'ダーク'], ['field', '屋外モード（高コントラスト・大きな文字）']].map(([k, v]) => `<option value="${k}"${st.theme === k ? ' selected' : ''}>${v}</option>`).join('')}</select></label>
       </div></section>
 
+      ${p ? `
+      <section class="panel"><h2>Excelでの管理（${esc(p.name)}）</h2>
+        <p class="small">プロジェクトのすべて（調査区・出現種・植生区画・植生表・判定結果・遷移予測・計算の設定値）を1つのExcelファイルに書き出します。Excelで編集した「調査区」「出現種」などのシートを読み込んで戻すこともできます。</p>
+        <div class="row">
+          <button class="btn primary sm" id="xOut">Excelに書き出す</button>
+          <label class="btn sm"><input type="file" id="xIn" accept=".xlsx,.xls" hidden>Excelから読み込んで追加・更新</label>
+          <button class="btn sm" id="xTpl">記入用テンプレート</button>
+        </div>
+      </section>
+
+      <section class="panel"><h2>判定の重みと係数</h2>
+        <p class="small muted">群集の適合度の計算に使う値です（このプロジェクトのみ）。算出方法は<a href="#about">根拠と出典</a>を参照してください。</p>
+        <table class="plain"><thead><tr><th>項目</th><th>値</th><th>既定値</th></tr></thead><tbody>
+          ${Object.keys(wLab).map(k => `<tr><td>${wLab[k]}</td><td><input type="number" step="0.05" min="0" data-w="${k}" value="${W[k]}" style="max-width:90px"></td><td>${VEG.Analysis.DEFAULT_WEIGHTS[k]}</td></tr>`).join('')}
+        </tbody></table>
+        <button class="btn sm" id="wReset" style="margin-top:8px">既定値に戻す</button>
+      </section>
+
       <section class="panel"><h2>植生帯の境界標高</h2>
-        <p class="small muted">都道府県ごとの目安値です。地域の文献や暖かさの指数にもとづいて調整できます。</p>
-        <div class="grid2"><label class="f"><span>都道府県</span><select id="zPref">${opts(VEG.PREFS.map(p => p.name), '東京都')}</select></label></div>
+        <p class="small muted">都道府県ごとの目安値です（このプロジェクトのみ）。地域の文献や暖かさの指数にもとづいて調整できます。</p>
+        <div class="grid2"><label class="f"><span>都道府県</span><select id="zPref">${opts(VEG.PREFS.map(x => x.name), (p.releves.find(r => r.pref) || {}).pref || '東京都')}</select></label></div>
         <div id="zEdit"></div>
       </section>
 
-      <section class="panel"><h2>群集参照DB</h2>
-        <p class="small">内蔵 ${VEG.SYNTAXA.length}群集 ＋ 追加 ${st.customSyntaxa.length}群集${st.replaceDB && st.customSyntaxa.length ? '（追加分のみ使用中）' : ''}。地域の植生誌にもとづく群集を同じ形式のJSONで読み込めます。</p>
-        <div class="row">
-          <button class="btn sm" id="dbOut">現在のDBをJSONで書き出す（雛形）</button>
-          <label class="btn sm"><input type="file" id="dbIn" accept=".json" hidden>JSONを追加読み込み</label>
-          <label class="btn sm ghost"><input type="checkbox" id="dbRep" ${st.replaceDB ? 'checked' : ''}> 内蔵DBを使わず追加分だけ使う</label>
-          <button class="btn sm danger" id="dbClr">追加分を消去</button>
-        </div>
+      <section class="panel"><h2>遷移年数</h2>
+        <p class="small">${c.stageYears ? 'Excelから読み込んだ独自の年数を使っています。' : '内蔵の目安値を使っています。'}年数を変えるときは、書き出したExcelの「遷移年数」シートを編集して読み込みます。</p>
+        ${c.stageYears ? '<button class="btn sm" id="yReset">内蔵の目安値に戻す</button>' : ''}
       </section>
 
-      <section class="panel"><h2>データの保存と移行</h2>
-        <p class="small">データはこの端末のブラウザ内に保存されています（約 ${(bytes / 1024).toFixed(0)} KB）。ブラウザのデータ消去で失われるため、調査後はバックアップを書き出してください。</p>
+      <section class="panel"><h2>群集参照DB</h2>
+        <p class="small">内蔵 ${VEG.SYNTAXA.length}群集 ＋ 追加 ${c.customSyntaxa.length}群集${c.replaceDB && c.customSyntaxa.length ? '（追加分のみ使用中）' : ''}。地域の群集を加えるには、書き出したExcelの「群集参照DB」シートに行を足し、出典区分を「追加」にして読み込みます。</p>
         <div class="row">
-          <button class="btn sm primary" id="bkOut">バックアップを書き出す（JSON）</button>
-          <label class="btn sm"><input type="file" id="bkIn" accept=".json" hidden>バックアップから復元</label>
-          <button class="btn sm" id="csvOut">全記録をCSVで書き出す</button>
-          <button class="btn sm danger" id="wipe">すべてのデータを消去</button>
+          <label class="btn sm ghost"><input type="checkbox" id="dbRep" ${c.replaceDB ? 'checked' : ''}> 内蔵DBを使わず追加分だけ使う</label>
+          <button class="btn sm danger" id="dbClr" ${c.customSyntaxa.length ? '' : 'disabled'}>追加分を消去</button>
         </div>
+      </section>` : `<section class="panel"><p>プロジェクトを開くと、Excelでの管理や計算の設定ができます。</p><a class="btn sm primary" href="#home">プロジェクトを選ぶ</a></section>`}
+
+      <section class="panel"><h2>端末内のデータ</h2>
+        <p class="small">データはこの端末のブラウザ内に保存されています（約 ${(bytes / 1024).toFixed(0)} KB、${S.projects.length}プロジェクト）。ブラウザのデータ消去やアプリの削除で失われるため、調査後はExcelに書き出して保管してください。</p>
+        <details><summary class="small" style="cursor:pointer">その他の形式</summary>
+          <p class="small" style="margin-top:8px">全プロジェクトを1つのファイルにまとめるバックアップ（JSON形式）です。機種変更時の移行に使えます。</p>
+          <div class="row">
+            <button class="btn sm" id="bkOut">全プロジェクトのバックアップ</button>
+            <label class="btn sm"><input type="file" id="bkIn" accept=".json" hidden>バックアップから復元</label>
+            ${p ? '<button class="btn sm" id="csvOut">このプロジェクトの記録をCSVで書き出す</button>' : ''}
+          </div>
+        </details>
+        <hr>
+        <button class="btn sm danger" id="wipe">すべてのデータを消去</button>
       </section>
 
       <section class="panel"><h2>このアプリについて</h2>
         <p class="small">植生野帳 ${VERSION}。Braun-Blanquet法（植物社会学的手法）による植生調査の記録・植生表作成・群落区分・遷移予測・植生図作成を、通信のない現場でも行うためのアプリです。</p>
-        <p class="small">群集参照DBと遷移年数は代表的な知見をまとめた簡易版です。報告書などで群集名を確定する際は、各地域の植生誌・原記載・環境省自然環境保全基礎調査の凡例と照合してください。</p>
-        <p class="small muted">標高・都道府県の取得と背景地図には国土地理院のサービスを利用しています。</p>
+        <p class="small">群集参照DB、植生帯の境界標高、遷移の年数は簡易な目安です。報告書などで群集名を確定する際は、地域の植生誌・原記載・環境省自然環境保全基礎調査の凡例と照合してください。</p>
       </section>`;
     $('#sScale').onchange = e => { st.scale = e.target.value; save(); toast('被度の階級を変更しました'); };
     $('#sObs').oninput = e => { st.observer = e.target.value; save(); };
     $('#sTheme').onchange = e => { st.theme = e.target.value; save(); applyTheme(); };
-    const zEdit = () => {
-      const name = $('#zPref').value, p = VEG.PREFS.find(x => x.name === name), o = st.prefOverrides[name] || {};
-      const v = k => o[k] != null ? o[k] : p[k];
-      $('#zEdit').innerHTML = `<table class="plain" style="margin-top:8px"><tbody>
-        <tr><td>常緑広葉樹林域の上限</td><td><input type="number" data-zk="ev" value="${v('ev')}"> m</td></tr>
-        <tr><td>落葉広葉樹林域の上限</td><td><input type="number" data-zk="cd" value="${v('cd')}"> m</td></tr>
-        <tr><td>森林限界</td><td><input type="number" data-zk="sa" value="${v('sa')}"> m</td></tr>
-        <tr><td>気候区分</td><td><select data-zk="sea">${[['J', '日本海側'], ['P', '太平洋側']].map(([k, n]) => `<option value="${k}"${v('sea') === k ? ' selected' : ''}>${n}</option>`).join('')}</select></td></tr></tbody></table>
-        <button class="btn sm" id="zReset" style="margin-top:8px">${esc(name)}を既定値に戻す</button>`;
-      $('#zEdit').onchange = e => { const k = e.target.dataset.zk; if (!k) return; st.prefOverrides[name] = Object.assign({}, st.prefOverrides[name], { [k]: k === 'sea' ? e.target.value : +e.target.value }); save(); toast('境界を更新しました'); };
-      $('#zReset').onclick = () => { delete st.prefOverrides[name]; save(); zEdit(); };
-    };
-    $('#zPref').onchange = zEdit; zEdit();
-    $('#dbOut').onclick = () => download('syntaxa_db.json', JSON.stringify({ format: 'vegsurvey-syntaxa-1', syntaxa: syntaxa() }, null, 1), 'application/json');
-    $('#dbIn').onchange = e => {
-      const file = e.target.files[0]; if (!file) return;
-      file.text().then(t => {
-        const j = JSON.parse(t); const arr = Array.isArray(j) ? j : j.syntaxa;
-        if (!Array.isArray(arr)) throw new Error('syntaxa配列がありません');
-        const ok = arr.filter(s => s && s.ja && Array.isArray(s.char)).map(s => Object.assign({ id: 'c-' + s.ja, la: '', cls: '', type: 'climax', stage: 7, zones: ['WE'], regions: [], sea: '', diff: [], comp: [], note: '' }, s));
-        const ids = new Set(ok.map(s => s.id));
-        st.customSyntaxa = st.customSyntaxa.filter(s => !ids.has(s.id)).concat(ok.filter(s => !VEG.SYNTAXA.some(b => b.id === s.id && JSON.stringify(b) === JSON.stringify(s))));
-        save(true); refreshSpeciesList(); toast(`${ok.length}群集を読み込みました`); renderSettings();
-      }).catch(err => toast('読み込めませんでした：' + err.message));
-    };
-    $('#dbRep').onchange = e => { st.replaceDB = e.target.checked; save(); toast(st.replaceDB ? '追加分のDBだけを使います' : '内蔵DBと追加分を併用します'); };
-    $('#dbClr').onclick = () => { if (confirm('追加した群集データを消去しますか？')) { st.customSyntaxa = []; st.replaceDB = false; save(true); renderSettings(); } };
-    $('#bkOut').onclick = () => download(`vegsurvey_backup_${today()}.json`, JSON.stringify({ format: 'vegsurvey-backup-1', version: VERSION, exported: new Date().toISOString(), data: S }, null, 1), 'application/json');
+    if (p) {
+      $('#xOut').onclick = exportProjectExcel;
+      $('#xIn').onchange = e => importExcelFile(e.target.files[0], 'merge');
+      $('#xTpl').onclick = () => { if (needXLSX()) VEG.Excel.exportTemplate(c, syntaxa()); };
+      $$('[data-w]').forEach(el => { el.onchange = () => { const v = +el.value; if (isNaN(v) || v < 0) { toast('0以上の数値を入れてください'); return; } c.weights = Object.assign({}, c.weights, { [el.dataset.w]: v }); save(); toast('判定の値を更新しました'); }; });
+      $('#wReset').onclick = () => { c.weights = {}; save(true); renderSettings(); };
+      const zEdit = () => {
+        const name = $('#zPref').value, pr = VEG.PREFS.find(x => x.name === name), o = c.prefOverrides[name] || {};
+        const v = k => o[k] != null ? o[k] : pr[k];
+        $('#zEdit').innerHTML = `<table class="plain" style="margin-top:8px"><tbody>
+          <tr><td>常緑広葉樹林域の上限</td><td><input type="number" data-zk="ev" value="${v('ev')}"> m</td></tr>
+          <tr><td>落葉広葉樹林域の上限</td><td><input type="number" data-zk="cd" value="${v('cd')}"> m</td></tr>
+          <tr><td>森林限界</td><td><input type="number" data-zk="sa" value="${v('sa')}"> m</td></tr>
+          <tr><td>気候区分</td><td><select data-zk="sea">${[['J', '日本海側'], ['P', '太平洋側']].map(([k, n]) => `<option value="${k}"${v('sea') === k ? ' selected' : ''}>${n}</option>`).join('')}</select></td></tr></tbody></table>
+          <button class="btn sm" id="zReset" style="margin-top:8px">${esc(name)}を既定値に戻す</button>`;
+        $('#zEdit').onchange = e => { const k = e.target.dataset.zk; if (!k) return; c.prefOverrides[name] = Object.assign({}, c.prefOverrides[name], { [k]: k === 'sea' ? e.target.value : +e.target.value }); save(); toast('境界を更新しました'); };
+        $('#zReset').onclick = () => { delete c.prefOverrides[name]; save(); zEdit(); };
+      };
+      $('#zPref').onchange = zEdit; zEdit();
+      if ($('#yReset')) $('#yReset').onclick = () => { if (confirm('遷移年数を内蔵の目安値に戻しますか？')) { c.stageYears = null; save(true); renderSettings(); } };
+      $('#dbRep').onchange = e => { c.replaceDB = e.target.checked; save(); toast(c.replaceDB ? '追加分のDBだけを使います' : '内蔵DBと追加分を併用します'); };
+      $('#dbClr').onclick = () => { if (confirm(`追加した群集データ（${c.customSyntaxa.length}群集）を消去しますか？`)) { c.customSyntaxa = []; c.replaceDB = false; save(true); refreshSpeciesList(); renderSettings(); } };
+      if ($('#csvOut')) $('#csvOut').onclick = () => {
+        const head = ['調査区', '調査日', '調査者', '都道府県', '地点名', '緯度', '経度', '標高', '傾斜', '方位', '微地形', '土壌', '湿り', '人為的影響', '経過年数', '面積m2', '階層', '種名', '被度', '群度'];
+        const rows = [head];
+        p.releves.forEach(r => (r.records || []).forEach(x => rows.push([r.code, r.date, r.observer, r.pref, r.site, r.lat, r.lng, r.elev, r.slope, r.aspect, r.topo, r.soil, r.moist, r.impact, r.yearsSince, r.area, layerName(x.layer), x.sp, x.cover, x.soc])));
+        download(`${safeName(p.name)}_records_${today()}.csv`, toCSV(rows), 'text/csv');
+      };
+    }
+    $('#bkOut').onclick = () => download(`vegsurvey_backup_${today()}.json`, JSON.stringify({ format: 'vegsurvey-backup-2', version: VERSION, exported: new Date().toISOString(), data: S }, null, 1), 'application/json');
     $('#bkIn').onchange = e => {
       const file = e.target.files[0]; if (!file) return;
       file.text().then(t => {
         const j = JSON.parse(t); const d = j.data || j;
-        if (!Array.isArray(d.releves)) throw new Error('調査区データがありません');
-        const replace = confirm('現在のデータを置き換えますか？\n［OK］置き換える　［キャンセル］追加する');
-        if (replace) { S = Object.assign(defaults(), d); S.settings = Object.assign(defaults().settings, d.settings || {}); }
-        else {
-          const ids = new Set(S.releves.map(r => r.id));
-          d.releves.forEach(r => { if (ids.has(r.id)) r.id = r.id + '-' + Date.now().toString(36); S.releves.push(r); });
-          S.features = S.features.concat(d.features || []);
-        }
-        save(true); applyTheme(); refreshSpeciesList(); toast(`${d.releves.length}地点を読み込みました`); renderSettings();
-      }).catch(err => toast('復元できませんでした：' + err.message));
-    };
-    $('#csvOut').onclick = () => {
-      const head = ['調査区', '調査日', '調査者', '都道府県', '地点名', '緯度', '経度', '標高', '傾斜', '方位', '微地形', '土壌', '湿り', '人為的影響', '経過年数', '面積m2', '階層', '種名', '被度', '群度'];
-      const rows = [head];
-      S.releves.forEach(r => (r.records || []).forEach(x => rows.push([r.code, r.date, r.observer, r.pref, r.site, r.lat, r.lng, r.elev, r.slope, r.aspect, r.topo, r.soil, r.moist, r.impact, r.yearsSince, r.area, layerName(x.layer), x.sp, x.cover, x.soc])));
-      download(`releves_long_${today()}.csv`, toCSV(rows), 'text/csv');
+        let projects = d.projects;
+        if (!projects && Array.isArray(d.releves)) { const pp = makeProject('復元したデータ'); pp.releves = d.releves; pp.features = d.features || []; projects = [pp]; }
+        if (!Array.isArray(projects)) throw new Error('プロジェクトのデータがありません');
+        const ids = new Set(S.projects.map(x => x.id));
+        projects.map(normalizeProject).forEach(pp => { if (ids.has(pp.id)) { pp.id = pp.id + '-' + Date.now().toString(36); pp.name += '（復元）'; } S.projects.push(pp); });
+        save(true); refreshSpeciesList(); toast(`${projects.length}プロジェクトを復元しました`); location.hash = '#home';
+      }).catch(err => alert('復元できませんでした：' + err.message));
     };
     $('#wipe').onclick = () => {
-      if (!confirm('すべての調査区・植生区画・設定を消去します。先にバックアップを書き出しましたか？')) return;
-      S = defaults(); save(true); applyTheme(); toast('消去しました'); location.hash = '#list';
+      if (!confirm(`すべてのプロジェクト（${S.projects.length}件）と設定をこの端末から消去します。元に戻せません。\nExcelへの書き出しは済んでいますか？`)) return;
+      if (prompt('確認のため「消去」と入力してください') !== '消去') { toast('消去を取り消しました'); return; }
+      S = defaults(); save(true); applyTheme(); toast('消去しました'); location.hash = '#home';
     };
   }
 

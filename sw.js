@@ -3,15 +3,16 @@
    - 地図ライブラリ（jsDelivr）：初回取得後キャッシュ
    - 地理院タイル：表示したタイルをキャッシュ（上限あり）し、圏外でも再表示
    - 標高・住所API：通信時のみ */
-const VERSION = 'v1.0.1';
+const VERSION = 'v1.1.0';
 const APP_CACHE = 'vegsurvey-app-' + VERSION;
-const LIB_CACHE = 'vegsurvey-lib-v1';
+const LIB_CACHE = 'vegsurvey-lib-v2';
 const TILE_CACHE = 'vegsurvey-tiles-v1';
 const TILE_LIMIT = 6000;
 const APP_FILES = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 const LIBS = [
   'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css',
-  'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js'
+  'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js',
+  'https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js'
 ];
 
 self.addEventListener('install', e => {
@@ -58,7 +59,7 @@ self.addEventListener('fetch', e => {
     return;
   }
   // ライブラリ：キャッシュ優先
-  if (url.hostname === 'cdn.jsdelivr.net') {
+  if (url.hostname === 'cdn.jsdelivr.net' || url.hostname === 'cdn.sheetjs.com') {
     e.respondWith((async () => {
       const c = await caches.open(LIB_CACHE);
       const hit = await c.match(req);
